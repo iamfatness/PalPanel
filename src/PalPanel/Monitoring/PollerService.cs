@@ -1,26 +1,45 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using PalPanel.Data; using PalPanel.PalApi; using PalPanel.Supervisor;
 namespace PalPanel.Monitoring;
 
 public class PollerService(IPalApi api, ProcessSupervisor sup, SnapshotService snap,
-    IDbContextFactory<PanelDb> dbf, IEventSink events, IOptions<PanelOptions> opts) : BackgroundService
+    IDbContextFactory<PanelDb> dbf, IEventSink events, IOptions<PanelOptions> opts,
+    ILogger<PollerService>? log = null) : BackgroundService
 {
+    private readonly ILogger _log = log ?? NullLogger<PollerService>.Instance;
     private Dictionary<string, (long SessionId, string Name)> _online = [];
     private bool _apiWasReachable = true;
+    private bool _reconciled;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             try { await TickAsync(ct); }
-            catch (Exception ex) { await events.LogAsync("poller-error", ex.Message); }
+            catch (Exception ex)
+            {
+                // The event sink itself can fail (disk full, DB locked); that must never
+                // kill the poll loop / host — fall back to loud ILogger output instead.
+                try { await events.LogAsync("poller-error", ex.Message); }
+                catch (Exception sinkEx)
+                { _log.LogError(sinkEx, "Event sink write failed for poller-error: {Detail}", ex.Message); }
+            }
             await Task.Delay(TimeSpan.FromSeconds(opts.Value.PollIntervalSeconds), ct);
         }
     }
 
     public async Task TickAsync(CancellationToken ct)
     {
+        // One-time startup reconciliation: after a panel restart (with or without
+        // adoption of a still-running PalServer), _online is empty but the DB may
+        // still hold open PlayerSession rows from the previous run. Close them all;
+        // players still online get fresh join rows from this tick's diff, which is
+        // correct-by-construction. Flag is set only after success so a transient DB
+        // failure retries on the next tick instead of leaving stale rows forever.
+        if (!_reconciled) { await ReconcileStaleSessionsAsync(ct); _reconciled = true; }
+
         var state = sup.State;
         if (state is ServerState.Stopped or ServerState.Held or ServerState.Stopping)
         {
@@ -76,6 +95,17 @@ public class PollerService(IPalApi api, ProcessSupervisor sup, SnapshotService s
             _online.Remove(userId);
             await events.LogAsync("player-leave", $"{v.Name} left");
         }
+    }
+
+    private async Task ReconcileStaleSessionsAsync(CancellationToken ct)
+    {
+        await using var db = await dbf.CreateDbContextAsync(ct);
+        var stale = await db.Sessions.Where(s => s.LeftAt == null).ToListAsync(ct);
+        if (stale.Count == 0) return;
+        var now = DateTimeOffset.UtcNow;
+        foreach (var s in stale) s.LeftAt = now;
+        await db.SaveChangesAsync(ct);
+        await events.LogAsync("sessions-reconciled", $"Closed {stale.Count} stale session(s) left open by a previous panel run");
     }
 
     private async Task CloseAllSessionsAsync()

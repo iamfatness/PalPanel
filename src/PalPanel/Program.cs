@@ -30,7 +30,13 @@ using (var scope = app.Services.CreateScope())
 
 var supervisor = app.Services.GetRequiredService<ProcessSupervisor>();
 var eventSink = app.Services.GetRequiredService<PalPanel.Data.IEventSink>();
-supervisor.OnEvent = (t, d) => eventSink.LogAsync(t, d);
+// A failing event sink (disk full, DB locked) must be loud but must never propagate
+// into supervisor internals — fall back to ILogger error output.
+supervisor.OnEvent = async (t, d) =>
+{
+    try { await eventSink.LogAsync(t, d); }
+    catch (Exception ex) { app.Logger.LogError(ex, "Event sink write failed for {Type}: {Detail}", t, d); }
+};
 supervisor.AdoptExistingIfRunning();
 
 app.UseStaticFiles();
