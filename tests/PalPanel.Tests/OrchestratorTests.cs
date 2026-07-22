@@ -15,6 +15,10 @@ public class OrchestratorTests
     // noise, per the brief's `order.Where(o => o is not "info")` assertion.
     private class RecordingApi(List<string> order, Func<FakeProcess> currentProcess) : IPalApi
     {
+        // When set, AnnounceAsync throws for any message the predicate matches (before
+        // recording) — simulates the REST API being down / the server having crashed.
+        public Func<string, bool>? AnnounceThrows { get; set; }
+
         public Task<ServerInfo?> GetInfoAsync(CancellationToken ct) => Task.FromResult<ServerInfo?>(null);
         public Task<IReadOnlyList<PlayerInfo>> GetPlayersAsync(CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<PlayerInfo>>([]);
@@ -22,6 +26,7 @@ public class OrchestratorTests
 
         public Task AnnounceAsync(string message, CancellationToken ct)
         {
+            if (AnnounceThrows?.Invoke(message) == true) throw new HttpRequestException("api unreachable");
             var m = Regex.Match(message, @"\d+");
             order.Add(m.Success ? $"announce:{m.Value}" : "info");
             return Task.CompletedTask;
@@ -44,10 +49,14 @@ public class OrchestratorTests
 
     private class FakeBackup(List<string> order) : IBackupService
     {
+        public bool ThrowOnCreate { get; set; }
         public List<string> Reasons { get; } = [];
 
         public Task<string> CreateBackupAsync(string reason, CancellationToken ct)
-        { Reasons.Add(reason); order.Add("backup"); return Task.FromResult("b.zip"); }
+        {
+            if (ThrowOnCreate) throw new IOException("disk full");
+            Reasons.Add(reason); order.Add("backup"); return Task.FromResult("b.zip");
+        }
 
         public IReadOnlyList<BackupInfo> List() => [];
         public Task RestoreAsync(string fileName, CancellationToken ct) => Task.CompletedTask;
@@ -61,7 +70,7 @@ public class OrchestratorTests
     }
 
     private static (ServerOrchestrator Orch, ProcessSupervisor Sup, FakeLauncher Launcher, List<string> Order,
-        FakeBackup Backup, FakeEventSink Events) Make()
+        FakeBackup Backup, FakeEventSink Events, RecordingApi Api) Make()
     {
         var order = new List<string>();
         var launcher = new FakeLauncher();
@@ -71,13 +80,13 @@ public class OrchestratorTests
         var backup = new FakeBackup(order);
         var events = new FakeEventSink();
         var orch = new ServerOrchestrator(sup, api, backup, events) { Delay = (_, _) => Task.CompletedTask };
-        return (orch, sup, launcher, order, backup, events);
+        return (orch, sup, launcher, order, backup, events, api);
     }
 
     [Fact]
     public async Task Restart_RunsFullRitualInOrder()
     {
-        var (orch, sup, launcher, order, backup, _) = Make();
+        var (orch, sup, launcher, order, backup, _, _) = Make();
         await sup.StartAsync(default);
         sup.MarkRunning();
         launcher.OnLaunch = _ => order.Add("start"); // set only after the initial launch above
@@ -94,7 +103,7 @@ public class OrchestratorTests
     [Fact]
     public async Task Restart_NoWarningMinutes_StillStopsBacksUpAndStarts()
     {
-        var (orch, sup, launcher, order, _, _) = Make();
+        var (orch, sup, launcher, order, _, _, _) = Make();
         await sup.StartAsync(default);
         sup.MarkRunning();
         launcher.OnLaunch = _ => order.Add("start");
@@ -105,9 +114,96 @@ public class OrchestratorTests
     }
 
     [Fact]
+    public async Task Restart_BackupThrows_ServerStillRelaunched()
+    {
+        // A failing pre-stop backup (disk full, ...) must never leave the server down:
+        // the relaunch is the priority; the failure is logged loudly instead.
+        var (orch, sup, launcher, order, backup, events, _) = Make();
+        await sup.StartAsync(default);
+        sup.MarkRunning();
+        launcher.OnLaunch = _ => order.Add("start");
+        backup.ThrowOnCreate = true;
+
+        await orch.RestartAsync("admin@x.com", [1], default);
+
+        Assert.Equal(["announce:1", "save", "shutdown", "start"], order.Where(o => o is not "info").ToList());
+        Assert.Equal(ServerState.Starting, sup.State);
+        Assert.Contains(events.Events, e => e.Type == "backup-failed");
+        Assert.Contains(events.Events, e => e.Type == "restart-launched");
+    }
+
+    [Fact]
+    public async Task Restart_WhileHeldWithApiDown_SkipsWarningsAndStartsServer()
+    {
+        // Scheduled restart against a Held server (3 crashes tripped the hold) with the REST
+        // API unreachable: warnings must be skipped (nobody is reachable to read them), no
+        // exception may escape, and the server must come back up.
+        var (orch, sup, launcher, order, backup, _, api) = Make();
+        await sup.StartAsync(default);
+        for (int i = 0; i < 3; i++)
+        {
+            sup.MarkRunning();
+            launcher.Launched[^1].SimulateExit();
+            await sup.WaitForIdleAsync();
+        }
+        Assert.Equal(ServerState.Held, sup.State);
+        api.AnnounceThrows = _ => true;
+        launcher.OnLaunch = _ => order.Add("start");
+
+        await orch.RestartAsync("scheduler", [10, 5, 1], default);
+
+        Assert.Equal(["start"], order);          // no announces, no save/shutdown (nothing was running), no backup
+        Assert.Equal(ServerState.Starting, sup.State);
+        Assert.Empty(backup.Reasons);            // no running server: nothing to back up
+    }
+
+    [Fact]
+    public async Task Restart_AnnounceThrowsWhileRunning_WarningsBestEffortAndRitualCompletes()
+    {
+        // Warning announces are best-effort: each failure is logged as announce-failed and
+        // the ritual proceeds to stop/backup/start regardless.
+        var (orch, sup, launcher, order, _, events, api) = Make();
+        await sup.StartAsync(default);
+        sup.MarkRunning();
+        launcher.OnLaunch = _ => order.Add("start");
+        api.AnnounceThrows = m => m.Contains("restarting in"); // only warnings fail; the stop-phase announce succeeds
+
+        await orch.RestartAsync("admin@x.com", [10, 5, 1], default);
+
+        Assert.Equal(["save", "shutdown", "backup", "start"], order.Where(o => o is not "info").ToList());
+        Assert.Equal(ServerState.Starting, sup.State);
+        Assert.Equal(3, events.Events.Count(e => e.Type == "announce-failed"));
+    }
+
+    [Fact]
+    public async Task ConcurrentOp_LogsLifecycleBusy_AndCompletesAfterRitual()
+    {
+        // The restart ritual can hold the lifecycle gate for 10+ minutes of warning delays;
+        // an op silently queued behind it would look hung to the operator. It must be loud.
+        var (orch, sup, launcher, order, _, events, _) = Make();
+        await sup.StartAsync(default);
+        sup.MarkRunning();
+        launcher.OnLaunch = _ => order.Add("start");
+        var delayGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        orch.Delay = (_, _) => delayGate.Task;
+
+        var restart = orch.RestartAsync("admin@x.com", [1], default);
+        Assert.False(restart.IsCompleted);       // parked in the gated warning delay, holding the gate
+
+        var stop = orch.StopAsync("ops@x.com", default);
+        Assert.False(stop.IsCompleted);
+        Assert.Contains(events.Events, e => e.Type == "lifecycle-busy" && e.Actor == "ops@x.com");
+
+        delayGate.SetResult();                   // warning delay elapses; ritual finishes and releases the gate
+        await restart;
+        await stop;
+        Assert.Equal(ServerState.Stopped, sup.State);
+    }
+
+    [Fact]
     public async Task Stop_AnnouncesSavesShutsDownAndBacksUp()
     {
-        var (orch, sup, launcher, order, backup, _) = Make();
+        var (orch, sup, launcher, order, backup, _, _) = Make();
         await sup.StartAsync(default);
         sup.MarkRunning();
 
@@ -119,9 +215,23 @@ public class OrchestratorTests
     }
 
     [Fact]
+    public async Task Stop_WhenAlreadyStopped_SkipsBackup()
+    {
+        // No server was running: there is no world state worth snapshotting, and a
+        // "pre-stop" backup of an idle save directory would just churn the retention window.
+        var (orch, sup, _, order, backup, _, _) = Make();
+
+        await orch.StopAsync("admin@x.com", default);
+
+        Assert.Equal(ServerState.Stopped, sup.State);
+        Assert.Empty(order);
+        Assert.Empty(backup.Reasons);
+    }
+
+    [Fact]
     public async Task Start_LogsEventAndStartsSupervisor()
     {
-        var (orch, sup, _, _, _, events) = Make();
+        var (orch, sup, _, _, _, events, _) = Make();
         await orch.StartAsync("admin@x.com", default);
         Assert.Equal(ServerState.Starting, sup.State);
         Assert.Contains(events.Events, e => e.Type == "start" && e.Actor == "admin@x.com");
@@ -130,7 +240,7 @@ public class OrchestratorTests
     [Fact]
     public async Task Save_CallsApiAndLogsEvent()
     {
-        var (orch, _, _, order, _, events) = Make();
+        var (orch, _, _, order, _, events, _) = Make();
         await orch.SaveAsync("admin@x.com", default);
         Assert.Equal(["save"], order);
         Assert.Contains(events.Events, e => e.Type == "save" && e.Actor == "admin@x.com");
@@ -139,7 +249,7 @@ public class OrchestratorTests
     [Fact]
     public async Task Announce_CallsApiAndLogsEvent()
     {
-        var (orch, _, _, order, _, events) = Make();
+        var (orch, _, _, order, _, events, _) = Make();
         await orch.AnnounceAsync("admin@x.com", "hello everyone", default);
         Assert.Equal(["info"], order); // no digit in the message
         Assert.Contains(events.Events, e => e.Type == "announce" && e.Detail == "hello everyone" && e.Actor == "admin@x.com");

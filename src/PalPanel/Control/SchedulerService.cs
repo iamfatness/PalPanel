@@ -39,6 +39,13 @@ public class SchedulerService(
         }
     }
 
+    // Sequential awaits by design: a due restart fires its full ritual inline, so the 10+
+    // minutes of warning delays pause this loop — and every other schedule's evaluation —
+    // until the ritual completes. Accepted v1 tradeoff for a single-server panel: concurrent
+    // firing would only serialize on the orchestrator's lifecycle gate anyway, and any
+    // occurrence that came due during the pause still fires on the next pass (its occurrence
+    // time is <= the new `now` and > last-fired); multiple missed occurrences of one schedule
+    // collapse into a single late firing.
     public async Task CheckDueAsync(DateTimeOffset now, CancellationToken ct)
     {
         var checkedFrom = _lastCheck;
