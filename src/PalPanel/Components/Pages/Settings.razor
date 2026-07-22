@@ -11,6 +11,7 @@
 @inject IPalApi Api
 @inject IOptions<PanelOptions> Opts
 @inject AuthenticationStateProvider AuthState
+@inject IAdminGuard Guard
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — Settings</PageTitle>
@@ -173,35 +174,52 @@
             return;
         }
 
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var s = new Schedule { Cron = _newCron, Action = _newAction, Enabled = true };
-        db.Schedules.Add(s);
-        await db.SaveChangesAsync();
-        await Events.LogAsync("schedule-change", $"Added schedule {s.Cron} -> {s.Action}", _email);
-        _newCron = "";
-        await LoadSchedulesAsync();
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var s = new Schedule { Cron = _newCron, Action = _newAction, Enabled = true };
+            db.Schedules.Add(s);
+            await db.SaveChangesAsync();
+            await Events.LogAsync("schedule-change", $"Added schedule {s.Cron} -> {s.Action}", _email);
+            _newCron = "";
+            await LoadSchedulesAsync();
+        }
+        catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }
     }
 
     private async Task ToggleEnabledAsync(Schedule s)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var row = await db.Schedules.FindAsync(s.Id);
-        if (row is null) return;
-        row.Enabled = !row.Enabled;
-        await db.SaveChangesAsync();
-        await Events.LogAsync("schedule-change", $"Schedule {row.Id} ({row.Cron}/{row.Action}) enabled={row.Enabled}", _email);
-        await LoadSchedulesAsync();
+        _scheduleError = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var row = await db.Schedules.FindAsync(s.Id);
+            if (row is null) return;
+            row.Enabled = !row.Enabled;
+            await db.SaveChangesAsync();
+            await Events.LogAsync("schedule-change", $"Schedule {row.Id} ({row.Cron}/{row.Action}) enabled={row.Enabled}", _email);
+            await LoadSchedulesAsync();
+        }
+        catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }
     }
 
     private async Task DeleteScheduleAsync(Schedule s)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var row = await db.Schedules.FindAsync(s.Id);
-        if (row is null) return;
-        db.Schedules.Remove(row);
-        await db.SaveChangesAsync();
-        await Events.LogAsync("schedule-change", $"Deleted schedule {row.Id} ({row.Cron}/{row.Action})", _email);
-        await LoadSchedulesAsync();
+        _scheduleError = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var row = await db.Schedules.FindAsync(s.Id);
+            if (row is null) return;
+            db.Schedules.Remove(row);
+            await db.SaveChangesAsync();
+            await Events.LogAsync("schedule-change", $"Deleted schedule {row.Id} ({row.Cron}/{row.Action})", _email);
+            await LoadSchedulesAsync();
+        }
+        catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }
     }
 
     private async Task TestApiAsync()

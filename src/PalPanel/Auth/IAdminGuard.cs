@@ -14,6 +14,8 @@ namespace PalPanel.Auth;
 //   - Backups.razor's "Back up now" and "Restore" actions (IBackupService itself is NOT
 //     guarded — it's also called internally by the scheduler/orchestrator, which are
 //     already guarded upstream; guarding it again there would break those system flows)
+//   - Settings.razor's schedule add/toggle/delete actions (AddScheduleAsync,
+//     ToggleEnabledAsync, DeleteScheduleAsync)
 public interface IAdminGuard
 {
     Task EnsureAdminAsync(string actor, string action, CancellationToken ct);
