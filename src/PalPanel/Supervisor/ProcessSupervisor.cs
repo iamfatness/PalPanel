@@ -8,6 +8,7 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
     private IServerProcess? _proc;
     private CancellationTokenSource? _watchCts;
     private bool _stopRequested;
+    private int _epoch;               // lifecycle generation; bumped by Start/Stop to fence stale crash handlers
     private int _restartAttempt;
     private Task _pending = Task.CompletedTask;
     private CrashTracker _crashes = null!;
@@ -40,7 +41,7 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
         lock (_lock)
         {
             if (State is ServerState.Starting or ServerState.Running or ServerState.Stopping) return;
-            _stopRequested = false; EnsureTracker(); _crashes.Reset(); _restartAttempt = 0;
+            _epoch++; _stopRequested = false; EnsureTracker(); _crashes.Reset(); _restartAttempt = 0;
             SetState(ServerState.Starting);
         }
         await LaunchAndWatchOrHoldAsync();
@@ -59,7 +60,7 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
         lock (_lock)
         {
             if (State is ServerState.Stopped or ServerState.Held) { SetState(ServerState.Stopped); return; }
-            _stopRequested = true; p = _proc; SetState(ServerState.Stopping);
+            _epoch++; _stopRequested = true; p = _proc; SetState(ServerState.Stopping);
         }
         _watchCts?.Cancel();
         try { await gracefulShutdown(); } catch (Exception ex) { await Fire("stop-error", ex.Message); }
@@ -76,23 +77,24 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
     private void EnsureTracker() =>
         _crashes ??= new CrashTracker(_o.MaxCrashesInWindow, TimeSpan.FromMinutes(_o.CrashWindowMinutes));
 
-    private void LaunchAndWatch()
-    {
-        var exeDir = Path.GetDirectoryName(_o.ServerExePath) ?? ".";
-        _proc = launcher.Launch(_o.ServerExePath, _o.ServerArgs, exeDir);
-        Watch(_proc);
-    }
-
     // Loud launch: a failed Launch (bad exe path, access denied, ...) must never
     // leave the supervisor stuck in Starting with nothing watching. It fires
     // "launch-failed" and lands in Held — manual intervention required.
+    // Process.Start (potentially blocking) runs OUTSIDE _lock; only the cheap
+    // bookkeeping (_proc assignment, watcher start, state flip) is under it.
     private async Task LaunchAndWatchOrHoldAsync()
     {
         Exception? err = null;
-        lock (_lock)
+        try
         {
-            try { LaunchAndWatch(); }
-            catch (Exception ex) { err = ex; SetState(ServerState.Held); }
+            var exeDir = Path.GetDirectoryName(_o.ServerExePath) ?? ".";
+            var proc = launcher.Launch(_o.ServerExePath, _o.ServerArgs, exeDir);
+            lock (_lock) { _proc = proc; Watch(proc); }
+        }
+        catch (Exception ex)
+        {
+            err = ex;
+            lock (_lock) SetState(ServerState.Held);
         }
         if (err is not null) await Fire("launch-failed", err.Message);
     }
@@ -135,9 +137,10 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
         {
             EnsureTracker();
             await Fire("crash", "PalServer exited unexpectedly");
-            bool held;
+            bool held; int epoch;
             lock (_lock)
             {
+                epoch = _epoch; // lifecycle generation this handler belongs to
                 held = _crashes.RecordCrashAndCheckHold(DateTimeOffset.UtcNow);
                 if (held) { RunningSince = null; SetState(ServerState.Held); }
                 else SetState(ServerState.Crashed);
@@ -150,9 +153,11 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
             await RestartDelay(_restartAttempt++);
             lock (_lock)
             {
-                // A stop that arrived during the backoff is terminal: StopAsync
-                // owns the transition to Stopped; do not relaunch behind it.
-                if (_stopRequested) return;
+                // A stop that arrived during the backoff is terminal (StopAsync
+                // owns the transition to Stopped), and any Start/Stop since our
+                // crash decision bumped _epoch — in either case this handler is
+                // stale and must not relaunch behind the new lifecycle.
+                if (_stopRequested || epoch != _epoch) return;
                 SetState(ServerState.Starting);
             }
             await LaunchAndWatchOrHoldAsync();

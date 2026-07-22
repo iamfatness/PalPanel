@@ -30,6 +30,17 @@ class ThrowingLauncher : IProcessLauncher
         => throw new InvalidOperationException("exe not found");
 }
 
+class FlakyLauncher : IProcessLauncher
+{
+    public List<FakeProcess> Launched { get; } = [];
+    public IServerProcess? FindExisting(string name) => null;
+    public IServerProcess Launch(string exe, string args, string wd)
+    {
+        if (Launched.Count >= 1) throw new InvalidOperationException("exe vanished before relaunch");
+        var p = new FakeProcess(); Launched.Add(p); return p;
+    }
+}
+
 public class ProcessSupervisorTests
 {
     static ProcessSupervisor Make(FakeLauncher l, PanelOptions? o = null)
@@ -143,6 +154,50 @@ public class ProcessSupervisorTests
             OnEvent = (type, detail) => { events.Add((type, detail)); return Task.CompletedTask; }
         };
         await s.StartAsync(CancellationToken.None);
+        Assert.Contains(events, e => e.Type == "launch-failed");
+        Assert.Equal(ServerState.Held, s.State);
+    }
+
+    [Fact]
+    public async Task StopThenStartDuringBackoff_StaleHandlerDoesNotDoubleLaunch()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var l = new FakeLauncher();
+        var o = new PanelOptions { MaxCrashesInWindow = 3, CrashWindowMinutes = 10, GracefulStopTimeoutSeconds = 1 };
+        var s = new ProcessSupervisor(l, Options.Create(o)) { RestartDelay = _ => gate.Task };
+        await s.StartAsync(CancellationToken.None);
+        s.MarkRunning();
+        var crashed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        s.StateChanged += st => { if (st == ServerState.Crashed) crashed.TrySetResult(); };
+        l.Launched[0].SimulateExit();                      // process A crashes
+        await crashed.Task;                                // handler parked in gated backoff
+        await s.StopAsync(gracefulShutdown: () => Task.CompletedTask, CancellationToken.None);
+        await s.StartAsync(CancellationToken.None);        // operator restarts: process B
+        Assert.Equal(2, l.Launched.Count);
+        Assert.Equal(ServerState.Starting, s.State);
+        gate.TrySetResult();                               // stale handler for A's crash wakes up
+        await s.WaitForIdleAsync();
+        Assert.Equal(2, l.Launched.Count);                 // no phantom process C
+        Assert.Equal(ServerState.Starting, s.State);       // B's lifecycle untouched
+        s.MarkRunning();
+        Assert.Equal(ServerState.Running, s.State);
+    }
+
+    [Fact]
+    public async Task RelaunchThrows_FiresEventAndHolds()
+    {
+        var events = new List<(string Type, string Detail)>();
+        var l = new FlakyLauncher();                       // first Launch succeeds, second throws
+        var o = new PanelOptions { MaxCrashesInWindow = 3, CrashWindowMinutes = 10, GracefulStopTimeoutSeconds = 1 };
+        var s = new ProcessSupervisor(l, Options.Create(o))
+        {
+            RestartDelay = _ => Task.CompletedTask,
+            OnEvent = (type, detail) => { events.Add((type, detail)); return Task.CompletedTask; }
+        };
+        await s.StartAsync(CancellationToken.None);
+        s.MarkRunning();
+        l.Launched[0].SimulateExit();                      // crash -> backoff -> relaunch throws
+        await s.WaitForIdleAsync();
         Assert.Contains(events, e => e.Type == "launch-failed");
         Assert.Equal(ServerState.Held, s.State);
     }
