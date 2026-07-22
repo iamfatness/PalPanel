@@ -11,7 +11,7 @@ namespace PalPanel.Auth;
 // PalPanel is a single-operator panel behind Cloudflare Access with a handful of
 // users, so the race window isn't worth locking complexity yet; revisit if this
 // ever becomes multi-operator.
-public class RoleService(IDbContextFactory<PanelDb> factory, IEventSink events, RoleChangeNotifier notifier)
+public class RoleService(IDbContextFactory<PanelDb> factory, IEventSink events, RoleChangeNotifier notifier, IAdminGuard guard)
 {
     public static readonly string[] ValidRoles = ["Admin", "Viewer", "Blocked"];
 
@@ -42,8 +42,15 @@ public class RoleService(IDbContextFactory<PanelDb> factory, IEventSink events, 
         return new PanelPrincipal(user.Email, user.Role);
     }
 
-    public async Task SetRoleAsync(string email, string role, string actor)
+    public async Task SetRoleAsync(string email, string role, string actor, CancellationToken ct = default)
     {
+        // Server-side authorization backstop, same as every mutating IServerOrchestrator
+        // method: <AuthorizeView Roles="Admin"> in Settings.razor is a rendering concern
+        // only, not a security boundary. Without this, any Viewer could self-promote to
+        // Admin (or demote/block anyone) purely by reaching the C# call, regardless of
+        // what buttons the UI happened to show them.
+        await guard.EnsureAdminAsync(actor, "role-change", ct);
+
         if (!ValidRoles.Contains(role))
             throw new ArgumentException($"Invalid role '{role}'. Must be one of: {string.Join(", ", ValidRoles)}", nameof(role));
 

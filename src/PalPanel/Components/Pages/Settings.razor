@@ -155,6 +155,7 @@
         }
         catch (InvalidOperationException ex) { _userError = ex.Message; }
         catch (ArgumentException ex) { _userError = ex.Message; }
+        catch (UnauthorizedAccessException ex) { _userError = ex.Message; }
     }
 
     private async Task AddScheduleAsync()

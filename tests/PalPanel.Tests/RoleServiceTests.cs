@@ -14,7 +14,9 @@ public class RoleServiceTests
         var dbf = sp.GetRequiredService<IDbContextFactory<PanelDb>>();
         using (var db = dbf.CreateDbContext()) db.Database.EnsureCreated();
         var notifier = new RoleChangeNotifier();
-        return (new RoleService(dbf, sp.GetRequiredService<IEventSink>(), notifier), dbf, notifier);
+        var events = sp.GetRequiredService<IEventSink>();
+        var guard = new AdminGuard(dbf, events); // real guard end-to-end, not a fake allow-guard
+        return (new RoleService(dbf, events, notifier, guard), dbf, notifier);
     }
 
     private static RoleService MakeRoleService() => MakeRoleServiceWithDb().Rs;
@@ -95,5 +97,26 @@ public class RoleServiceTests
         Assert.Equal("owner@x.com", evt.ActorEmail);
         Assert.Contains("friend@x.com", evt.Detail);
         Assert.Contains("Admin", evt.Detail);
+    }
+
+    // Server-side authorization backstop: SetRoleAsync must reject a non-Admin actor
+    // BEFORE mutating anything, exactly like every IServerOrchestrator method already does
+    // via IAdminGuard.EnsureAdminAsync. Without this, any Viewer could promote themselves
+    // (or anyone) to Admin purely because the UI's <AuthorizeView Roles="Admin"> happened
+    // to be bypassed — AuthorizeView is not a security boundary (see IAdminGuard.cs).
+    [Fact]
+    public async Task SetRoleAsync_NonAdminActor_ThrowsAndLeavesRoleUnchanged()
+    {
+        var (rs, dbf, _) = MakeRoleServiceWithDb();
+        await rs.GetOrCreateAsync("owner@x.com"); // first user -> Admin
+        await rs.GetOrCreateAsync("friend@x.com"); // second user -> Viewer
+        await rs.GetOrCreateAsync("target@x.com"); // third user -> Viewer (promotion target)
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => rs.SetRoleAsync("target@x.com", "Admin", "friend@x.com"));
+
+        using var db = dbf.CreateDbContext();
+        Assert.Equal("Viewer", db.Users.Single(u => u.Email == "target@x.com").Role);
+        Assert.Contains(db.Events, e => e.Type == "unauthorized-action" && e.ActorEmail == "friend@x.com");
     }
 }

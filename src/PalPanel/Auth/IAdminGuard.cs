@@ -3,12 +3,17 @@ using PalPanel.Data;
 
 namespace PalPanel.Auth;
 
-// Server-side authorization backstop for every mutating orchestrator action. AuthorizeView
+// Server-side authorization backstop for every mutating, UI-triggered action. AuthorizeView
 // in the Razor pages is a rendering/UX concern only (it hides buttons) — it is NOT a
 // security boundary on its own, since a Blazor Server circuit's C# method calls are not
-// gated by what markup happens to be visible. Every mutating IServerOrchestrator method
-// must call EnsureAdminAsync FIRST, before doing anything else, so a non-Admin actor can
-// never reach the API/supervisor/backup layers no matter how the call was made.
+// gated by what markup happens to be visible. Every one of the following must call
+// EnsureAdminAsync FIRST, before doing anything else, so a non-Admin actor can never reach
+// the API/supervisor/backup/role layers no matter how the call was made:
+//   - every mutating IServerOrchestrator method (Start/Stop/Restart/Save/Announce/Kick/Ban)
+//   - RoleService.SetRoleAsync (blocks self-promotion/demotion by non-Admins)
+//   - Backups.razor's "Back up now" and "Restore" actions (IBackupService itself is NOT
+//     guarded — it's also called internally by the scheduler/orchestrator, which are
+//     already guarded upstream; guarding it again there would break those system flows)
 public interface IAdminGuard
 {
     Task EnsureAdminAsync(string actor, string action, CancellationToken ct);

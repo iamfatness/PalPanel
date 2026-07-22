@@ -1,10 +1,12 @@
 @page "/backups"
+@using PalPanel.Auth
 @using PalPanel.Control
 @using PalPanel.Supervisor
 @implements IDisposable
 @inject IBackupService BackupSvc
 @inject ProcessSupervisor Sup
 @inject AuthenticationStateProvider AuthState
+@inject IAdminGuard Guard
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — Backups</PageTitle>
@@ -88,7 +90,17 @@
     private async Task BackUpNowAsync()
     {
         _busy = true; _error = null;
-        try { await BackupSvc.CreateBackupAsync($"manual ({_email})", CancellationToken.None); Refresh(); }
+        try
+        {
+            // Server-side authorization backstop: <AuthorizeView Roles="Admin"> above only
+            // hides the button — it is not a security boundary on its own. IBackupService
+            // is called internally by the scheduler/orchestrator (already guarded upstream),
+            // so the guard belongs here, at the UI-triggered entry point, not inside the
+            // service itself.
+            await Guard.EnsureAdminAsync(_email, "backup-now", CancellationToken.None);
+            await BackupSvc.CreateBackupAsync($"manual ({_email})", CancellationToken.None);
+            Refresh();
+        }
         catch (Exception ex) { _error = ex.Message; }
         finally { _busy = false; }
     }
@@ -100,7 +112,12 @@
             return;
 
         _busy = true; _error = null;
-        try { await BackupSvc.RestoreAsync(b.FileName, CancellationToken.None); Refresh(); }
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "restore", CancellationToken.None);
+            await BackupSvc.RestoreAsync(b.FileName, CancellationToken.None);
+            Refresh();
+        }
         catch (Exception ex) { _error = ex.Message; }
         finally { _busy = false; }
     }
