@@ -1,4 +1,10 @@
+using PalPanel.Data;
 using PalPanel.Supervisor;
+
+public class NullEventSink : IEventSink
+{
+    public Task LogAsync(string type, string detail, string? actorEmail = null) => Task.CompletedTask;
+}
 
 public class FakeProcess : IServerProcess
 {
