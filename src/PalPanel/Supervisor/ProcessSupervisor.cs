@@ -33,6 +33,7 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
         if (existing is null) return;
         lock (_lock)
         {
+            if (State is not ServerState.Stopped and not ServerState.Held) return;
             _epoch++; _stopRequested = false;   // adoption starts a new lifecycle generation
             _proc = existing; RunningSince = DateTimeOffset.UtcNow;
             EnsureTracker(); SetState(ServerState.Running); Watch(existing);

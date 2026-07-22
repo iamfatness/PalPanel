@@ -12,6 +12,13 @@ public sealed class StubPalServer : IAsyncDisposable
     public int PlayerCount { get; set; } = 0;
     public List<string> PlayerNames { get; set; } = [];
 
+    // Stable per-name userId, assigned on first sighting — mirrors a real server where a
+    // player's identity doesn't change when other players join/leave. Index-based ids would
+    // collide across polls whenever the player list composition (not just size) changes.
+    private readonly Dictionary<string, string> _userIds = [];
+    private string UserIdFor(string name) =>
+        _userIds.TryGetValue(name, out var id) ? id : _userIds[name] = $"steam_{_userIds.Count}";
+
     public StubPalServer()
     {
         var b = WebApplication.CreateBuilder();
@@ -28,7 +35,7 @@ public sealed class StubPalServer : IAsyncDisposable
         _app.MapGet("/v1/api/players", () => Results.Json(new
         {
             players = PlayerNames.Select((n, i) => new
-            { name = n, playerId = $"pid{i}", userId = $"steam_{i}", level = 10 + i, ping = 30.0 }).ToArray()
+            { name = n, playerId = $"pid{i}", userId = UserIdFor(n), level = 10 + i, ping = 30.0 }).ToArray()
         }));
         _app.MapGet("/v1/api/metrics", () => Results.Json(new
         { serverfps = 58, currentplayernum = PlayerNames.Count, serverframetime = 16.7, maxplayernum = 32, uptime = 3600 }));
