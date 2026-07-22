@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PalPanel/PalPanel.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PalPanel.Tests/PalPanel.Tests.csproj" />
+  </Folder>
+</Solution>
