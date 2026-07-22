@@ -1,4 +1,5 @@
 using PalPanel.Components;
+using PalPanel.PalApi;
 using PalPanel.Supervisor;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -9,6 +10,7 @@ builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true);
 builder.Services.Configure<PalPanel.PanelOptions>(builder.Configuration.GetSection("Panel"));
 builder.Services.AddSingleton<IProcessLauncher, RealProcessLauncher>();
 builder.Services.AddSingleton<ProcessSupervisor>();
+builder.Services.AddHttpClient<IPalApi, PalApiClient>();
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 
 var app = builder.Build();
