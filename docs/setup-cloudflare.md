@@ -143,13 +143,47 @@ This exposes the panel without opening any inbound port on the router/UDM.
    cloudflared tunnel route dns palpanel panel.iamfatness.us
    ```
 
-6. Install cloudflared as a Windows service so it survives reboot, and start
-   it:
+6. Install cloudflared as a Windows service so it survives reboot.
 
    ```
    cloudflared service install
+   ```
+
+   **Important -- config file placement.** The Windows service runs as
+   `LocalSystem`, which reads its config from
+   `C:\Windows\System32\config\systemprofile\.cloudflared\`, **not** from
+   `%USERPROFILE%\.cloudflared\` where `cloudflared tunnel login` /
+   `tunnel create` wrote `cert.pem`, the `<tunnel-id>.json` credentials
+   file, and where you created `config.yml`. Copy them over before starting
+   the service:
+
+   ```powershell
+   $dst = "C:\Windows\System32\config\systemprofile\.cloudflared"
+   New-Item -ItemType Directory -Force -Path $dst | Out-Null
+   Copy-Item "$env:USERPROFILE\.cloudflared\config.yml"        $dst
+   Copy-Item "$env:USERPROFILE\.cloudflared\cert.pem"          $dst
+   Copy-Item "$env:USERPROFILE\.cloudflared\<tunnel-id>.json"  $dst
+   ```
+
+   (Also make sure `credentials-file:` in the copied `config.yml` points at
+   the credentials JSON in this `systemprofile` path, or use an absolute path
+   that resolves the same from both locations.)
+
+   Then start the service:
+
+   ```
    sc start cloudflared
    ```
+
+   Simpler alternative: token-based service install avoids the file-placement
+   step entirely. Copy the tunnel's token from the Cloudflare Zero Trust
+   dashboard (Networks -> Tunnels -> your tunnel -> Configure) and run
+   `cloudflared service install <TOKEN>`. In that mode the tunnel config
+   (ingress rules) is managed in the dashboard rather than the local
+   `config.yml`, so set the `panel.iamfatness.us -> http://localhost:5080`
+   public hostname there instead. This runbook keeps the config-file path as
+   primary because it keeps the ingress rules in version-controllable local
+   files.
 
 7. Verify: from a machine off the LAN (e.g. phone on cellular data), browse
    to `https://panel.iamfatness.us`. At this point, before Access is
@@ -169,15 +203,22 @@ its own user/password system for the front door.
    domain.
 
 2. Put the team domain into `appsettings.Local.json` on the install
-   machine:
+   machine, **including the `https://` scheme**:
 
    ```json
    {
      "Panel": {
-       "AccessTeamDomain": "iamfatness.cloudflareaccess.com"
+       "AccessTeamDomain": "https://iamfatness.cloudflareaccess.com"
      }
    }
    ```
+
+   The `https://` scheme is required and must match Cloudflare's issuer
+   exactly, with no trailing slash. PalPanel uses `AccessTeamDomain` both to
+   build the JWKS URL (`<AccessTeamDomain>/cdn-cgi/access/certs`) and as the
+   expected token issuer (`iss`), and Cloudflare sets the `iss` claim to the
+   full `https://...cloudflareaccess.com` URL -- a value without the scheme
+   will fail issuer validation and reject every login.
 
 3. Zero Trust -> **Access -> Applications -> Add an application ->
    Self-hosted**:
@@ -195,12 +236,13 @@ its own user/password system for the front door.
    - Save the application. Cloudflare shows the application's **AUD tag**
      (audience) on the application's overview/settings page -- copy it.
 
-4. Put the AUD tag into `appsettings.Local.json` alongside the team domain:
+4. Put the AUD tag into `appsettings.Local.json` alongside the team domain
+   (keep the `https://` scheme on `AccessTeamDomain`):
 
    ```json
    {
      "Panel": {
-       "AccessTeamDomain": "iamfatness.cloudflareaccess.com",
+       "AccessTeamDomain": "https://iamfatness.cloudflareaccess.com",
        "AccessAud": "<aud tag from the application settings page>"
      }
    }
