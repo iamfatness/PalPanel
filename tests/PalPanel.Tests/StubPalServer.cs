@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Hosting;
 
 public sealed class StubPalServer : IAsyncDisposable
 {
@@ -14,13 +15,7 @@ public sealed class StubPalServer : IAsyncDisposable
     public StubPalServer()
     {
         var b = WebApplication.CreateBuilder();
-        // Find a random available port
-        using var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
-        socket.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0));
-        int port = ((System.Net.IPEndPoint)socket.LocalEndPoint!).Port;
-        socket.Close();
-
-        b.WebHost.UseUrls($"http://127.0.0.1:{port}");
+        b.WebHost.UseUrls("http://127.0.0.1:0");
         _app = b.Build();
         _app.Use(async (ctx, next) =>
         {
@@ -44,7 +39,7 @@ public sealed class StubPalServer : IAsyncDisposable
                 Posts.Add((ep, await r.ReadToEndAsync()));
                 ctx.Response.StatusCode = 200;
             });
-        _app.StartAsync().GetAwaiter().GetResult();
+        _app.Start();
         BaseUrl = _app.Urls.First();
     }
 
