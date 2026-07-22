@@ -1,0 +1,9 @@
+<ul class="nav-menu">
+    <li><NavLink href="/" Match="NavLinkMatch.All">Overview</NavLink></li>
+    <li><NavLink href="/players">Players</NavLink></li>
+    <li><NavLink href="/history">History</NavLink></li>
+    <AuthorizeView Roles="Admin">
+        <li><NavLink href="/backups">Backups</NavLink></li>
+        <li><NavLink href="/settings">Settings</NavLink></li>
+    </AuthorizeView>
+</ul>

@@ -1,0 +1,17 @@
+@if (_visible)
+{
+    <div class="modal-overlay">
+        <div class="modal">
+            <h3>@_title</h3><p>@_body</p>
+            <button class="primary" @onclick="() => Close(true)">Confirm</button>
+            <button @onclick="() => Close(false)">Cancel</button>
+        </div>
+    </div>
+}
+@code {
+    private bool _visible; private string _title = "", _body = "";
+    private TaskCompletionSource<bool>? _tcs;
+    public Task<bool> Show(string title, string body)
+    { _title = title; _body = body; _visible = true; _tcs = new(); StateHasChanged(); return _tcs.Task; }
+    private void Close(bool result) { _visible = false; _tcs?.TrySetResult(result); StateHasChanged(); }
+}
