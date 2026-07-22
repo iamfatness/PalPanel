@@ -12,8 +12,10 @@ public class RetentionService(IDbContextFactory<PanelDb> dbf, ILogger<RetentionS
         while (!ct.IsCancellationRequested)
         {
             try { await RunOnceAsync(DateTimeOffset.UtcNow, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; } // shutdown, not an error
             catch (Exception ex) { _log.LogError(ex, "Retention pass failed"); }
-            await Task.Delay(TimeSpan.FromHours(1), ct);
+            try { await Task.Delay(TimeSpan.FromHours(1), ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
         }
     }
 
@@ -22,39 +24,45 @@ public class RetentionService(IDbContextFactory<PanelDb> dbf, ILogger<RetentionS
         await using var db = await dbf.CreateDbContextAsync(ct);
 
         // SQLite's EF provider can't translate DateTimeOffset comparisons/GroupBy in SQL, so we
-        // fetch the (small, at this data size) tables and filter/group client-side throughout.
+        // fetch the tables and filter/group client-side throughout. Raw samples are capped at
+        // 48 h by rule (2) and minute rollups at 30 d by rule (4); hour rollups grow unbounded
+        // but only ~9k rows/year, so full fetches stay trivially small for years of retention.
         var allSamples = await db.Samples.ToListAsync(ct);
         var allRollups = await db.SampleRollups.ToListAsync(ct);
 
-        // (1) roll raw samples older than 1h into minute buckets, skipping buckets already rolled up.
-        var oneHourAgo = now.AddHours(-1);
-        var oldSamples = allSamples.Where(s => s.Ts < oneHourAgo).ToList();
-        if (oldSamples.Count > 0)
+        // Only COMPLETE buckets are ever rolled up: a bucket is eligible when its END is at or
+        // before the cutoff. Rolling a bucket the cutoff splits mid-way would aggregate only its
+        // older samples, and the skip-existing check would then permanently ignore the rest —
+        // which rule (2)/(4) would later delete unaggregated.
+
+        // (1) roll raw samples into minute buckets whose end is past the 1h line,
+        //     skipping buckets already rolled up.
+        var minuteLine = now.AddHours(-1);
+        var existingMinuteBuckets = allRollups
+            .Where(r => r.Granularity == "minute")
+            .Select(r => r.Ts)
+            .ToHashSet();
+        foreach (var group in allSamples.GroupBy(s => TruncateToMinute(s.Ts)))
         {
-            var existingMinuteBuckets = allRollups
-                .Where(r => r.Granularity == "minute")
-                .Select(r => r.Ts)
-                .ToHashSet();
-
-            foreach (var group in oldSamples.GroupBy(TruncateToMinute))
+            if (group.Key.AddMinutes(1) > minuteLine) continue;         // incomplete bucket: wait
+            if (existingMinuteBuckets.Contains(group.Key)) continue;    // already rolled up
+            var rollup = new SampleRollup
             {
-                if (existingMinuteBuckets.Contains(group.Key)) continue;
-                var rollup = new SampleRollup
-                {
-                    Ts = group.Key,
-                    Granularity = "minute",
-                    AvgPlayers = group.Average(s => s.Players),
-                    MaxPlayers = group.Max(s => s.Players),
-                    AvgFps = group.Average(s => s.Fps),
-                    AvgMemoryBytes = (long)group.Average(s => s.MemoryBytes),
-                };
-                db.SampleRollups.Add(rollup);
-                allRollups.Add(rollup); // keep in-memory view current for step 3's aggregation below
-            }
-            await db.SaveChangesAsync(ct);
+                Ts = group.Key,
+                Granularity = "minute",
+                AvgPlayers = group.Average(s => s.Players),
+                MaxPlayers = group.Max(s => s.Players),
+                AvgFps = group.Average(s => s.Fps),
+                AvgMemoryBytes = (long)Math.Round(group.Average(s => s.MemoryBytes)),
+            };
+            db.SampleRollups.Add(rollup);
+            allRollups.Add(rollup); // keep in-memory view current for step 3's aggregation below
         }
+        await db.SaveChangesAsync(ct);
 
-        // (2) delete raw samples older than 48h.
+        // (2) delete raw samples older than 48h. This can never outrun step (1): any sample
+        // older than 48h sits in a bucket whose end is at most (now-48h)+1min, far past the
+        // 1h rollup line, so it was already aggregated by step (1) earlier in this same pass.
         var fortyEightHoursAgo = now.AddHours(-48);
         var expiredSamples = allSamples.Where(s => s.Ts < fortyEightHoursAgo).ToList();
         if (expiredSamples.Count > 0)
@@ -63,34 +71,31 @@ public class RetentionService(IDbContextFactory<PanelDb> dbf, ILogger<RetentionS
             await db.SaveChangesAsync(ct);
         }
 
-        // (3) roll minute rollups older than 48h into hour buckets, skipping buckets already rolled up.
-        var oldMinuteRollups = allRollups
-            .Where(r => r.Granularity == "minute" && r.Ts < fortyEightHoursAgo)
-            .ToList();
-        if (oldMinuteRollups.Count > 0)
+        // (3) roll minute rollups into hour buckets whose end is past the 48h line,
+        //     skipping buckets already rolled up.
+        var existingHourBuckets = allRollups
+            .Where(r => r.Granularity == "hour")
+            .Select(r => r.Ts)
+            .ToHashSet();
+        foreach (var group in allRollups.Where(r => r.Granularity == "minute").GroupBy(r => TruncateToHour(r.Ts)))
         {
-            var existingHourBuckets = allRollups
-                .Where(r => r.Granularity == "hour")
-                .Select(r => r.Ts)
-                .ToHashSet();
-
-            foreach (var group in oldMinuteRollups.GroupBy(r => TruncateToHour(r.Ts)))
+            if (group.Key.AddHours(1) > fortyEightHoursAgo) continue;   // incomplete bucket: wait
+            if (existingHourBuckets.Contains(group.Key)) continue;      // already rolled up
+            db.SampleRollups.Add(new SampleRollup
             {
-                if (existingHourBuckets.Contains(group.Key)) continue;
-                db.SampleRollups.Add(new SampleRollup
-                {
-                    Ts = group.Key,
-                    Granularity = "hour",
-                    AvgPlayers = group.Average(r => r.AvgPlayers),
-                    MaxPlayers = group.Max(r => r.MaxPlayers),
-                    AvgFps = group.Average(r => r.AvgFps),
-                    AvgMemoryBytes = (long)group.Average(r => r.AvgMemoryBytes),
-                });
-            }
-            await db.SaveChangesAsync(ct);
+                Ts = group.Key,
+                Granularity = "hour",
+                AvgPlayers = group.Average(r => r.AvgPlayers),
+                MaxPlayers = group.Max(r => r.MaxPlayers),
+                AvgFps = group.Average(r => r.AvgFps),
+                AvgMemoryBytes = (long)Math.Round(group.Average(r => r.AvgMemoryBytes)),
+            });
         }
+        await db.SaveChangesAsync(ct);
 
-        // (4) delete minute rollups older than 30 days.
+        // (4) delete minute rollups older than 30 days. Same non-outrunning argument as (2):
+        // a minute rollup older than 30d is in an hour bucket ending at most (now-30d)+1h,
+        // far past the 48h line, so step (3) already rolled it into an hour bucket above.
         var thirtyDaysAgo = now.AddDays(-30);
         var expiredMinuteRollups = allRollups
             .Where(r => r.Granularity == "minute" && r.Ts < thirtyDaysAgo)
@@ -102,8 +107,7 @@ public class RetentionService(IDbContextFactory<PanelDb> dbf, ILogger<RetentionS
         }
     }
 
-    private static DateTimeOffset TruncateToMinute(Sample s) => Truncate(s.Ts);
-    private static DateTimeOffset Truncate(DateTimeOffset t) =>
+    private static DateTimeOffset TruncateToMinute(DateTimeOffset t) =>
         new(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, t.Offset);
     private static DateTimeOffset TruncateToHour(DateTimeOffset t) =>
         new(t.Year, t.Month, t.Day, t.Hour, 0, 0, t.Offset);
