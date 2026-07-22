@@ -14,4 +14,28 @@ public class SmokeTests(WebApplicationFactory<Program> factory) : IClassFixture<
         Assert.Contains("PalPanel", html);
         Assert.Contains("Stopped", html); // initial supervisor state rendered
     }
+
+    [Fact]
+    public async Task Players_RendersWithAuthDisabled()
+    {
+        var client = factory.WithWebHostBuilder(b =>
+            b.UseSetting("Panel:AuthDisabled", "true")
+             .UseSetting("Panel:DbPath", Path.GetTempFileName())).CreateClient();
+        var resp = await client.GetAsync("/players");
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+        var html = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("Players", html);
+    }
+
+    [Fact]
+    public async Task History_RendersWithAuthDisabled()
+    {
+        var client = factory.WithWebHostBuilder(b =>
+            b.UseSetting("Panel:AuthDisabled", "true")
+             .UseSetting("Panel:DbPath", Path.GetTempFileName())).CreateClient();
+        var resp = await client.GetAsync("/history");
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+        var html = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("History", html);
+    }
 }

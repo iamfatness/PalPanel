@@ -19,6 +19,7 @@ builder.Services.AddDbContextFactory<PalPanel.Data.PanelDb>(o =>
     o.UseSqlite($"Data Source={builder.Configuration["Panel:DbPath"] ?? "palpanel.db"}"));
 builder.Services.AddSingleton<PalPanel.Data.IEventSink, PalPanel.Data.DbEventSink>();
 builder.Services.AddSingleton<PalPanel.Control.IBackupService, PalPanel.Control.BackupService>();
+builder.Services.AddSingleton<PalPanel.Auth.IAdminGuard, PalPanel.Auth.AdminGuard>();
 builder.Services.AddSingleton<PalPanel.Control.IServerOrchestrator, PalPanel.Control.ServerOrchestrator>();
 builder.Services.AddHostedService(sp => new PalPanel.Control.SchedulerService(
     sp.GetRequiredService<IDbContextFactory<PalPanel.Data.PanelDb>>(),

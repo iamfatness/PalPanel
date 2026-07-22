@@ -1,4 +1,4 @@
-using PalPanel.Data; using PalPanel.PalApi; using PalPanel.Supervisor;
+using PalPanel.Auth; using PalPanel.Data; using PalPanel.PalApi; using PalPanel.Supervisor;
 namespace PalPanel.Control;
 
 public interface IServerOrchestrator
@@ -8,9 +8,11 @@ public interface IServerOrchestrator
     Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct);
     Task SaveAsync(string actor, CancellationToken ct);
     Task AnnounceAsync(string actor, string message, CancellationToken ct);
+    Task KickAsync(string actor, string userId, string name, CancellationToken ct);
+    Task BanAsync(string actor, string userId, string name, CancellationToken ct);
 }
 
-public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupService backups, IEventSink events)
+public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupService backups, IEventSink events, IAdminGuard guard)
     : IServerOrchestrator
 {
     public Func<TimeSpan, CancellationToken, Task> Delay { get; set; } = Task.Delay;
@@ -29,6 +31,7 @@ public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupServi
 
     public async Task StartAsync(string actor, CancellationToken ct)
     {
+        await guard.EnsureAdminAsync(actor, "Start", ct);
         await AcquireGateAsync("Start", actor, ct);
         try { await events.LogAsync("start", "Start requested", actor); await sup.StartAsync(ct); }
         finally { _gate.Release(); }
@@ -36,6 +39,7 @@ public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupServi
 
     public async Task StopAsync(string actor, CancellationToken ct)
     {
+        await guard.EnsureAdminAsync(actor, "Stop", ct);
         await AcquireGateAsync("Stop", actor, ct);
         try { await StopCoreAsync(actor, ct); }
         finally { _gate.Release(); }
@@ -63,6 +67,7 @@ public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupServi
 
     public async Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct)
     {
+        await guard.EnsureAdminAsync(actor, "Restart", ct);
         await AcquireGateAsync("Restart", actor, ct);
         try
         {
@@ -100,8 +105,28 @@ public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupServi
     }
 
     public async Task SaveAsync(string actor, CancellationToken ct)
-    { await api.SaveAsync(ct); await events.LogAsync("save", "World save requested", actor); }
+    {
+        await guard.EnsureAdminAsync(actor, "Save", ct);
+        await api.SaveAsync(ct); await events.LogAsync("save", "World save requested", actor);
+    }
 
     public async Task AnnounceAsync(string actor, string message, CancellationToken ct)
-    { await api.AnnounceAsync(message, ct); await events.LogAsync("announce", message, actor); }
+    {
+        await guard.EnsureAdminAsync(actor, "Announce", ct);
+        await api.AnnounceAsync(message, ct); await events.LogAsync("announce", message, actor);
+    }
+
+    public async Task KickAsync(string actor, string userId, string name, CancellationToken ct)
+    {
+        await guard.EnsureAdminAsync(actor, "Kick", ct);
+        await api.KickAsync(userId, $"Kicked by {actor}", ct);
+        await events.LogAsync("kick", $"{name} ({userId}) kicked by {actor}", actor);
+    }
+
+    public async Task BanAsync(string actor, string userId, string name, CancellationToken ct)
+    {
+        await guard.EnsureAdminAsync(actor, "Ban", ct);
+        await api.BanAsync(userId, $"Banned by {actor}", ct);
+        await events.LogAsync("ban", $"{name} ({userId}) banned by {actor}", actor);
+    }
 }

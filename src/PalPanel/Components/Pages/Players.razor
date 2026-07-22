@@ -1,0 +1,146 @@
+@page "/players"
+@using Microsoft.EntityFrameworkCore
+@using PalPanel.Control
+@using PalPanel.Data
+@using PalPanel.Monitoring
+@using PalPanel.PalApi
+@implements IDisposable
+@inject SnapshotService Snap
+@inject IServerOrchestrator Orch
+@inject AuthenticationStateProvider AuthState
+@inject IDbContextFactory<PanelDb> DbFactory
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Players</PageTitle>
+
+<h1>Players</h1>
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Name</th><th>User ID</th><th>Level</th><th>Ping</th>
+            <AuthorizeView Roles="Admin"><Authorized><th>Actions</th></Authorized></AuthorizeView>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var p in _s.Players)
+        {
+            <tr>
+                <td>@p.Name</td>
+                <td>@p.UserId</td>
+                <td>@p.Level</td>
+                <td>@p.Ping</td>
+                <AuthorizeView Roles="Admin">
+                    <Authorized>
+                        <td>
+                            <button disabled="@_busy" @onclick="() => ConfirmKick(p)">Kick</button>
+                            <button disabled="@_busy" @onclick="() => ConfirmBan(p)">Ban</button>
+                        </td>
+                    </Authorized>
+                </AuthorizeView>
+            </tr>
+        }
+        @if (_s.Players.Count == 0)
+        {
+            <tr><td colspan="5">No players online.</td></tr>
+        }
+    </tbody>
+</table>
+
+<h2>Recent sessions</h2>
+<table class="data-table">
+    <thead><tr><th>Name</th><th>Joined</th><th>Left</th><th>Duration</th></tr></thead>
+    <tbody>
+        @foreach (var s in _recentSessions)
+        {
+            <tr>
+                <td>@s.Name</td>
+                <td>@s.JoinedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                <td>@(s.LeftAt is null ? "online" : s.LeftAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))</td>
+                <td>@FormatDuration((s.LeftAt ?? DateTimeOffset.UtcNow) - s.JoinedAt)</td>
+            </tr>
+        }
+        @if (_recentSessions.Count == 0)
+        {
+            <tr><td colspan="4">No sessions recorded yet.</td></tr>
+        }
+    </tbody>
+</table>
+
+<h2>Total playtime</h2>
+<table class="data-table">
+    <thead><tr><th>Name</th><th>User ID</th><th>Total playtime</th></tr></thead>
+    <tbody>
+        @foreach (var t in _totalPlaytime)
+        {
+            <tr><td>@t.Name</td><td>@t.UserId</td><td>@FormatDuration(t.Total)</td></tr>
+        }
+        @if (_totalPlaytime.Count == 0)
+        {
+            <tr><td colspan="3">No sessions recorded yet.</td></tr>
+        }
+    </tbody>
+</table>
+
+<ConfirmDialog @ref="_confirm" />
+
+@code {
+    private ServerSnapshot _s = null!;
+    private string _email = "";
+    private ConfirmDialog _confirm = null!;
+    private bool _busy;
+    private List<PlayerSession> _recentSessions = [];
+    private List<(string UserId, string Name, TimeSpan Total)> _totalPlaytime = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _s = Snap.Current;
+        Snap.Changed += OnSnapshot;
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        await LoadSessionsAsync();
+    }
+
+    private void OnSnapshot(ServerSnapshot s)
+    {
+        InvokeAsync(() => { _s = s; StateHasChanged(); });
+    }
+
+    private async Task LoadSessionsAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // EF Core's Sqlite provider cannot translate DateTimeOffset Where/OrderBy server-side
+        // (see Overview.razor / RetentionService.cs for the same established workaround) —
+        // load the (retention-bounded) table then filter/sort/group client-side.
+        var all = await db.Sessions.ToListAsync();
+        _recentSessions = all.OrderByDescending(s => s.JoinedAt).Take(50).ToList();
+
+        var now = DateTimeOffset.UtcNow;
+        _totalPlaytime = all
+            .GroupBy(s => (s.UserId, s.Name))
+            .Select(g => (g.Key.UserId, g.Key.Name,
+                Total: TimeSpan.FromTicks(g.Sum(s => ((s.LeftAt ?? now) - s.JoinedAt).Ticks))))
+            .OrderByDescending(t => t.Total)
+            .ToList();
+    }
+
+    private async Task ConfirmKick(PlayerInfo p)
+    {
+        if (await _confirm.Show($"Kick {p.Name}?", "The player will be disconnected from the server immediately."))
+            await Do(() => Orch.KickAsync(_email, p.UserId, p.Name, CancellationToken.None));
+    }
+
+    private async Task ConfirmBan(PlayerInfo p)
+    {
+        if (await _confirm.Show($"Ban {p.Name}?", "The player will be permanently banned from the server."))
+            await Do(() => Orch.BanAsync(_email, p.UserId, p.Name, CancellationToken.None));
+    }
+
+    private async Task Do(Func<Task> action)
+    { _busy = true; try { await action(); } finally { _busy = false; } }
+
+    private static string FormatDuration(TimeSpan t) =>
+        t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h {t.Minutes}m" : $"{(int)t.TotalHours}h {t.Minutes}m";
+
+    public void Dispose() => Snap.Changed -= OnSnapshot;
+}

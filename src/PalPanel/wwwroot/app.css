@@ -203,6 +203,95 @@ input {
         max-height: 200px;
     }
 
+/* Data tables (Players, History event log) */
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1.25rem;
+}
+
+    .data-table th,
+    .data-table td {
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .data-table th {
+        color: var(--text-dim);
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    .data-table tbody tr:last-child td {
+        border-bottom: none;
+    }
+
+    .data-table tbody tr:hover {
+        background: var(--bg-panel-2);
+    }
+
+select {
+    background: var(--bg-panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+}
+
+/* Stat cards (History uptime/peak) */
+
+.stats-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.stat-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    min-width: 180px;
+}
+
+.stat-label {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin-top: 0.25rem;
+}
+
+.stat-sub {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-top: 0.25rem;
+}
+
+.charts-3 {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 900px) {
+    .charts-3 {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* Confirm dialog */
 
 .modal-overlay {

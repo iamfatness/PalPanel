@@ -1,6 +1,9 @@
 using System.Text.RegularExpressions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using PalPanel;
+using PalPanel.Auth;
 using PalPanel.Control;
 using PalPanel.Data;
 using PalPanel.PalApi;
@@ -32,8 +35,10 @@ public class OrchestratorTests
             return Task.CompletedTask;
         }
 
-        public Task KickAsync(string userId, string message, CancellationToken ct) => Task.CompletedTask;
-        public Task BanAsync(string userId, string message, CancellationToken ct) => Task.CompletedTask;
+        public Task KickAsync(string userId, string message, CancellationToken ct)
+        { order.Add($"kick:{userId}"); return Task.CompletedTask; }
+        public Task BanAsync(string userId, string message, CancellationToken ct)
+        { order.Add($"ban:{userId}"); return Task.CompletedTask; }
         public Task UnbanAsync(string userId, CancellationToken ct) => Task.CompletedTask;
 
         public Task SaveAsync(CancellationToken ct)
@@ -69,6 +74,20 @@ public class OrchestratorTests
         { Events.Add((type, detail, actorEmail)); return Task.CompletedTask; }
     }
 
+    // Allow-all-by-default fake guard for tests that aren't exercising the authorization
+    // backstop itself (every other OrchestratorTests fixture uses actor emails that were
+    // never registered with a real RoleService-backed Admin/Viewer/Blocked role). The
+    // authorization backstop itself is covered separately below against the REAL AdminGuard
+    // wired to a real Sqlite-backed IDbContextFactory, so the bypass here doesn't hide it.
+    private class FakeAdminGuard : IAdminGuard
+    {
+        public HashSet<string> Admins { get; } = ["admin@x.com", "ops@x.com"];
+        public Task EnsureAdminAsync(string actor, string action, CancellationToken ct) =>
+            actor == AdminGuard.SchedulerActor || Admins.Contains(actor)
+                ? Task.CompletedTask
+                : throw new UnauthorizedAccessException($"{actor} not admin");
+    }
+
     private static (ServerOrchestrator Orch, ProcessSupervisor Sup, FakeLauncher Launcher, List<string> Order,
         FakeBackup Backup, FakeEventSink Events, RecordingApi Api) Make()
     {
@@ -79,8 +98,40 @@ public class OrchestratorTests
         var api = new RecordingApi(order, () => launcher.Launched[^1]);
         var backup = new FakeBackup(order);
         var events = new FakeEventSink();
-        var orch = new ServerOrchestrator(sup, api, backup, events) { Delay = (_, _) => Task.CompletedTask };
+        var orch = new ServerOrchestrator(sup, api, backup, events, new FakeAdminGuard()) { Delay = (_, _) => Task.CompletedTask };
         return (orch, sup, launcher, order, backup, events, api);
+    }
+
+    // Sets up a ServerOrchestrator wired to the REAL AdminGuard against a real (temp-file)
+    // Sqlite-backed IDbContextFactory<PanelDb>, seeded with the given (email, role) users.
+    // Used to prove the server-side authorization backstop end-to-end: a non-Admin actor's
+    // mutating call must throw UnauthorizedAccessException, log an unauthorized-action
+    // event, and never reach the API/supervisor/backup layers.
+    private static async Task<(ServerOrchestrator Orch, FakeEventSink Events, List<string> Order)>
+        MakeWithRealGuardAsync(params (string Email, string Role)[] users)
+    {
+        var services = new ServiceCollection();
+        services.AddDbContextFactory<PanelDb>(b => b.UseSqlite($"Data Source={Path.GetTempFileName()}"));
+        var sp = services.BuildServiceProvider();
+        var dbf = sp.GetRequiredService<IDbContextFactory<PanelDb>>();
+        await using (var db = await dbf.CreateDbContextAsync())
+        {
+            await db.Database.EnsureCreatedAsync();
+            foreach (var (email, role) in users)
+                db.Users.Add(new PanelUser { Email = email, Role = role, FirstSeen = DateTimeOffset.UtcNow, LastSeen = DateTimeOffset.UtcNow });
+            await db.SaveChangesAsync();
+        }
+
+        var order = new List<string>();
+        var launcher = new FakeLauncher();
+        var o = new PanelOptions { MaxCrashesInWindow = 3, CrashWindowMinutes = 10, GracefulStopTimeoutSeconds = 5 };
+        var sup = new ProcessSupervisor(launcher, Options.Create(o)) { RestartDelay = _ => Task.CompletedTask };
+        var api = new RecordingApi(order, () => launcher.Launched[^1]);
+        var backup = new FakeBackup(order);
+        var events = new FakeEventSink();
+        var guard = new AdminGuard(dbf, events);
+        var orch = new ServerOrchestrator(sup, api, backup, events, guard) { Delay = (_, _) => Task.CompletedTask };
+        return (orch, events, order);
     }
 
     [Fact]
@@ -253,5 +304,80 @@ public class OrchestratorTests
         await orch.AnnounceAsync("admin@x.com", "hello everyone", default);
         Assert.Equal(["info"], order); // no digit in the message
         Assert.Contains(events.Events, e => e.Type == "announce" && e.Detail == "hello everyone" && e.Actor == "admin@x.com");
+    }
+
+    [Fact]
+    public async Task Kick_CallsApiAndLogsEventWithActorAndName()
+    {
+        var (orch, _, _, order, _, events, _) = Make();
+        await orch.KickAsync("admin@x.com", "user-123", "Alice", default);
+        Assert.Equal(["kick:user-123"], order);
+        Assert.Contains(events.Events, e => e.Type == "kick" && e.Actor == "admin@x.com"
+            && e.Detail.Contains("Alice") && e.Detail.Contains("user-123"));
+    }
+
+    [Fact]
+    public async Task Ban_CallsApiAndLogsEventWithActorAndName()
+    {
+        var (orch, _, _, order, _, events, _) = Make();
+        await orch.BanAsync("admin@x.com", "user-123", "Alice", default);
+        Assert.Equal(["ban:user-123"], order);
+        Assert.Contains(events.Events, e => e.Type == "ban" && e.Actor == "admin@x.com"
+            && e.Detail.Contains("Alice") && e.Detail.Contains("user-123"));
+    }
+
+    // --- Server-side authorization backstop (against the real AdminGuard + real DB) ---
+
+    [Fact]
+    public async Task Kick_ByViewer_ThrowsUnauthorized_LogsEvent_AndNeverCallsApi()
+    {
+        var (orch, events, order) = await MakeWithRealGuardAsync(("viewer@x.com", "Viewer"));
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => orch.KickAsync("viewer@x.com", "user-1", "Alice", default));
+
+        Assert.Empty(order); // guard rejected before any api.KickAsync call was recorded
+        Assert.Contains(events.Events, e => e.Type == "unauthorized-action" && e.Actor == "viewer@x.com"
+            && e.Detail.Contains("viewer@x.com") && e.Detail.Contains("Kick"));
+        Assert.DoesNotContain(events.Events, e => e.Type == "kick");
+    }
+
+    [Fact]
+    public async Task Kick_ByAdmin_Proceeds()
+    {
+        var (orch, events, order) = await MakeWithRealGuardAsync(("admin2@x.com", "Admin"));
+
+        await orch.KickAsync("admin2@x.com", "user-1", "Alice", default);
+
+        Assert.Equal(["kick:user-1"], order);
+        Assert.Contains(events.Events, e => e.Type == "kick" && e.Actor == "admin2@x.com");
+    }
+
+    [Fact]
+    public async Task Kick_ByScheduler_ProceedsWithoutAnyDbRecord()
+    {
+        // No users seeded at all: "scheduler" must still be authorized purely by the
+        // constant, never via a Users-table lookup.
+        var (orch, _, order) = await MakeWithRealGuardAsync();
+
+        await orch.KickAsync(AdminGuard.SchedulerActor, "user-1", "Alice", default);
+
+        Assert.Equal(["kick:user-1"], order);
+    }
+
+    [Fact]
+    public async Task AllMutatingMethods_RejectNonAdminActor()
+    {
+        var (orch, _, order) = await MakeWithRealGuardAsync(("viewer@x.com", "Viewer"));
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => orch.StartAsync("viewer@x.com", default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => orch.StopAsync("viewer@x.com", default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => orch.RestartAsync("viewer@x.com", null, default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => orch.SaveAsync("viewer@x.com", default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => orch.AnnounceAsync("viewer@x.com", "hi", default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => orch.KickAsync("viewer@x.com", "u1", "Alice", default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => orch.BanAsync("viewer@x.com", "u1", "Alice", default));
+
+        Assert.Empty(order); // nothing ever reached the API/supervisor/backup layers
     }
 }
