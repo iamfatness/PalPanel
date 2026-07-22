@@ -31,20 +31,26 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
     {
         var existing = launcher.FindExisting(_o.ServerProcessName);
         if (existing is null) return;
-        _proc = existing; RunningSince = DateTimeOffset.UtcNow;
-        EnsureTracker(); SetState(ServerState.Running); Watch(existing);
+        lock (_lock)
+        {
+            _epoch++; _stopRequested = false;   // adoption starts a new lifecycle generation
+            _proc = existing; RunningSince = DateTimeOffset.UtcNow;
+            EnsureTracker(); SetState(ServerState.Running); Watch(existing);
+        }
         OnEvent?.Invoke("adopt", $"Adopted running PalServer pid {existing.Pid}");
     }
 
     public async Task StartAsync(CancellationToken ct)
     {
+        int epoch;
         lock (_lock)
         {
             if (State is ServerState.Starting or ServerState.Running or ServerState.Stopping) return;
             _epoch++; _stopRequested = false; EnsureTracker(); _crashes.Reset(); _restartAttempt = 0;
+            epoch = _epoch;
             SetState(ServerState.Starting);
         }
-        await LaunchAndWatchOrHoldAsync();
+        await LaunchAndWatchOrHoldAsync(epoch);
     }
 
     public void MarkRunning()
@@ -82,19 +88,38 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
     // "launch-failed" and lands in Held — manual intervention required.
     // Process.Start (potentially blocking) runs OUTSIDE _lock; only the cheap
     // bookkeeping (_proc assignment, watcher start, state flip) is under it.
-    private async Task LaunchAndWatchOrHoldAsync()
+    // The install is epoch-fenced: if a Stop (or any lifecycle change) won the
+    // race while Launch was in flight, the freshly launched process would be a
+    // live orphan under state Stopped — kill it loudly instead of installing it.
+    private async Task LaunchAndWatchOrHoldAsync(int epoch)
     {
         Exception? err = null;
+        IServerProcess? orphan = null;
         try
         {
             var exeDir = Path.GetDirectoryName(_o.ServerExePath) ?? ".";
             var proc = launcher.Launch(_o.ServerExePath, _o.ServerArgs, exeDir);
-            lock (_lock) { _proc = proc; Watch(proc); }
+            lock (_lock)
+            {
+                if (_stopRequested || epoch != _epoch) orphan = proc;
+                else { _proc = proc; Watch(proc); }
+            }
         }
         catch (Exception ex)
         {
             err = ex;
-            lock (_lock) SetState(ServerState.Held);
+            lock (_lock)
+            {
+                // Only land in Held if this launch still belongs to the current
+                // lifecycle; never clobber a Stop that won the race.
+                if (!_stopRequested && epoch == _epoch) SetState(ServerState.Held);
+            }
+        }
+        if (orphan is not null)
+        {
+            orphan.Kill();
+            await Fire("launch-aborted", $"stop won the race; killed pid {orphan.Pid}");
+            return;
         }
         if (err is not null) await Fire("launch-failed", err.Message);
     }
@@ -105,20 +130,31 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
     // NotifyProcessExitedAsync, which owns `_pending` for exactly the duration of
     // one crash-handling cycle so a relaunch's own perpetual watch never leaks
     // into what WaitForIdleAsync awaits.
+    // Must be called under _lock: it captures _epoch at watcher creation, binding
+    // the watcher (and any crash handling it triggers) to the lifecycle generation
+    // that launched/adopted this process.
     private void Watch(IServerProcess p)
     {
         _watchCts = new CancellationTokenSource();
         var ct = _watchCts.Token;
-        _ = RunWatchLoop(p, ct);
+        _ = RunWatchLoop(p, ct, _epoch);
     }
 
-    private async Task RunWatchLoop(IServerProcess p, CancellationToken ct)
+    private async Task RunWatchLoop(IServerProcess p, CancellationToken ct, int epoch)
     {
         try { await p.WaitForExitAsync(ct); } catch (OperationCanceledException) { return; }
-        if (!_stopRequested) await NotifyProcessExitedAsync();
+        if (!_stopRequested) await NotifyProcessExited(epoch);
     }
 
     public Task NotifyProcessExitedAsync()
+    {
+        // Public entry (tests/poller): bind to the current lifecycle generation.
+        int epoch;
+        lock (_lock) epoch = _epoch;
+        return NotifyProcessExited(epoch);
+    }
+
+    private Task NotifyProcessExited(int epoch)
     {
         // Own `_pending` for the full crash-handling cycle: assigned synchronously
         // here (before any await, before any relaunch's Watch() call can run), and
@@ -127,20 +163,24 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
         // new process's own (potentially unbounded) exit-watch.
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending = tcs.Task;
-        _ = RunCrashHandling(tcs);
+        _ = RunCrashHandling(tcs, epoch);
         return tcs.Task;
     }
 
-    private async Task RunCrashHandling(TaskCompletionSource tcs)
+    private async Task RunCrashHandling(TaskCompletionSource tcs, int epoch)
     {
         try
         {
             EnsureTracker();
             await Fire("crash", "PalServer exited unexpectedly");
-            bool held; int epoch;
+            bool held;
             lock (_lock)
             {
-                epoch = _epoch; // lifecycle generation this handler belongs to
+                // The OnEvent sink above may be a slow async write; if a Stop or
+                // Start completed inside that await, this handler belongs to a
+                // dead lifecycle — it must not record a phantom crash into the
+                // new tracker or clobber the new lifecycle's state.
+                if (epoch != _epoch) return;
                 held = _crashes.RecordCrashAndCheckHold(DateTimeOffset.UtcNow);
                 if (held) { RunningSince = null; SetState(ServerState.Held); }
                 else SetState(ServerState.Crashed);
@@ -154,13 +194,13 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
             lock (_lock)
             {
                 // A stop that arrived during the backoff is terminal (StopAsync
-                // owns the transition to Stopped), and any Start/Stop since our
-                // crash decision bumped _epoch — in either case this handler is
-                // stale and must not relaunch behind the new lifecycle.
+                // owns the transition to Stopped), and any Start/Stop since bumped
+                // _epoch — in either case this handler is stale and must not
+                // relaunch behind the new lifecycle.
                 if (_stopRequested || epoch != _epoch) return;
                 SetState(ServerState.Starting);
             }
-            await LaunchAndWatchOrHoldAsync();
+            await LaunchAndWatchOrHoldAsync(epoch);
         }
         finally { tcs.TrySetResult(); }
     }

@@ -18,9 +18,10 @@ class FakeLauncher : IProcessLauncher
 {
     public List<FakeProcess> Launched { get; } = [];
     public FakeProcess? Existing { get; set; }
+    public Action<int>? OnLaunch { get; set; }   // fires with the new launch count; lets tests await the Nth launch
     public IServerProcess? FindExisting(string name) => Existing;
     public IServerProcess Launch(string exe, string args, string wd)
-    { var p = new FakeProcess(); Launched.Add(p); return p; }
+    { var p = new FakeProcess(); Launched.Add(p); OnLaunch?.Invoke(Launched.Count); return p; }
 }
 
 class ThrowingLauncher : IProcessLauncher
@@ -37,6 +38,20 @@ class FlakyLauncher : IProcessLauncher
     public IServerProcess Launch(string exe, string args, string wd)
     {
         if (Launched.Count >= 1) throw new InvalidOperationException("exe vanished before relaunch");
+        var p = new FakeProcess(); Launched.Add(p); return p;
+    }
+}
+
+class BlockingLauncher : IProcessLauncher
+{
+    public readonly SemaphoreSlim Entered = new(0);
+    public readonly SemaphoreSlim Proceed = new(0);
+    public List<FakeProcess> Launched { get; } = [];
+    public IServerProcess? FindExisting(string name) => null;
+    public IServerProcess Launch(string exe, string args, string wd)
+    {
+        Entered.Release();       // signal: launch in progress
+        Proceed.Wait();          // park (on the caller's worker thread) until the test releases it
         var p = new FakeProcess(); Launched.Add(p); return p;
     }
 }
@@ -200,5 +215,79 @@ public class ProcessSupervisorTests
         await s.WaitForIdleAsync();
         Assert.Contains(events, e => e.Type == "launch-failed");
         Assert.Equal(ServerState.Held, s.State);
+    }
+
+    [Fact]
+    public async Task StopStartDuringCrashEventSink_StaleHandlerDoesNotTouchNewLifecycle()
+    {
+        var crashGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstCrash = true;
+        var l = new FakeLauncher();
+        var o = new PanelOptions { MaxCrashesInWindow = 3, CrashWindowMinutes = 10, GracefulStopTimeoutSeconds = 1 };
+        var s = new ProcessSupervisor(l, Options.Create(o))
+        {
+            RestartDelay = _ => Task.CompletedTask,
+            OnEvent = (type, detail) =>
+            {
+                if (type == "crash" && firstCrash) { firstCrash = false; return crashGate.Task; }
+                return Task.CompletedTask;
+            }
+        };
+        await s.StartAsync(CancellationToken.None);
+        s.MarkRunning();
+        l.Launched[0].SimulateExit();                      // handler parks awaiting the crash event sink
+        await s.StopAsync(gracefulShutdown: () => Task.CompletedTask, CancellationToken.None);
+        Assert.Equal(ServerState.Stopped, s.State);
+        await s.StartAsync(CancellationToken.None);        // new lifecycle: process B
+        Assert.Equal(2, l.Launched.Count);
+        Assert.Equal(ServerState.Starting, s.State);
+        var staleCycle = s.WaitForIdleAsync();             // A's crash cycle, captured before any new crash reuses _pending
+        crashGate.TrySetResult();                          // stale handler resumes inside Fire("crash")
+        await staleCycle;
+        Assert.Equal(2, l.Launched.Count);                 // no phantom relaunch
+        Assert.Equal(ServerState.Starting, s.State);       // B's Starting not clobbered by Crashed
+        s.MarkRunning();
+        Assert.Equal(ServerState.Running, s.State);
+        // prove the phantom crash was NOT recorded against B's fresh tracker:
+        // two real crashes must NOT trip the 3-crash hold (phantom would make them #2 and #3).
+        // Await the relaunch via an explicit launch signal — no assumptions about
+        // where the exit continuation is scheduled.
+        var launched3 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var launched4 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        l.OnLaunch = n => { if (n == 3) launched3.TrySetResult(); if (n == 4) launched4.TrySetResult(); };
+        l.Launched[1].SimulateExit();                      // real crash #1 -> relaunch C
+        await launched3.Task;
+        await s.WaitForIdleAsync();                        // crash cycle fully done (launch precedes cycle end)
+        Assert.Equal(3, l.Launched.Count);
+        Assert.Equal(ServerState.Starting, s.State);
+        s.MarkRunning();
+        l.Launched[2].SimulateExit();                      // real crash #2 -> relaunch D
+        await launched4.Task;
+        await s.WaitForIdleAsync();
+        Assert.NotEqual(ServerState.Held, s.State);
+        Assert.Equal(ServerState.Starting, s.State);
+        Assert.Equal(4, l.Launched.Count);
+    }
+
+    [Fact]
+    public async Task StopDuringLaunch_KillsOrphanAndStaysStopped()
+    {
+        var events = new List<(string Type, string Detail)>();
+        var l = new BlockingLauncher();
+        var o = new PanelOptions { MaxCrashesInWindow = 3, CrashWindowMinutes = 10, GracefulStopTimeoutSeconds = 1 };
+        var s = new ProcessSupervisor(l, Options.Create(o))
+        {
+            RestartDelay = _ => Task.CompletedTask,
+            OnEvent = (type, detail) => { lock (events) events.Add((type, detail)); return Task.CompletedTask; }
+        };
+        var startTask = Task.Run(() => s.StartAsync(CancellationToken.None));
+        await l.Entered.WaitAsync();                       // Launch is parked on a worker thread
+        await s.StopAsync(gracefulShutdown: () => Task.CompletedTask, CancellationToken.None);
+        Assert.Equal(ServerState.Stopped, s.State);
+        l.Proceed.Release();                               // Launch returns after stop already completed
+        await startTask;
+        Assert.True(l.Launched[0].WasKilled);              // orphan PalServer killed, not installed
+        Assert.Equal(ServerState.Stopped, s.State);
+        lock (events) Assert.Contains(events, e => e.Type == "launch-aborted");
     }
 }
