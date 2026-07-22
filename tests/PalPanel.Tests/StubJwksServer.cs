@@ -14,9 +14,10 @@ namespace PalPanel.Tests;
 public sealed class StubJwksServer : IAsyncDisposable
 {
     private readonly WebApplication _app;
-    private readonly RSA _rsa;
+    private RSA _rsa;
+    private int _keyGeneration = 1;
     public string BaseUrl { get; }
-    public const string KeyId = "test-key";
+    public string KeyId => $"test-key-{_keyGeneration}";
 
     public StubJwksServer()
     {
@@ -41,6 +42,16 @@ public sealed class StubJwksServer : IAsyncDisposable
         });
         _app.Start();
         BaseUrl = _app.Urls.First();
+    }
+
+    // Simulates Cloudflare rotating the Access signing key: the certs endpoint now
+    // serves ONLY the new key (with a new kid), and IssueToken signs with the new
+    // key from here on. Tokens signed with the old key can no longer be validated.
+    public void RotateKey()
+    {
+        _rsa.Dispose();
+        _rsa = RSA.Create(2048);
+        _keyGeneration++;
     }
 
     // Issuer/audience/email/expiry are all caller-controlled so tests can exercise

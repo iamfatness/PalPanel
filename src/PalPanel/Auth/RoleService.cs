@@ -3,7 +3,15 @@ using PalPanel.Data;
 
 namespace PalPanel.Auth;
 
-public class RoleService(IDbContextFactory<PanelDb> factory, IEventSink events)
+// Concurrency note (accepted for v1): GetOrCreateAsync's "is this the first user
+// ever" check and SetRoleAsync's "is this the last Admin" check are read-then-write
+// (TOCTOU) sequences with no transaction/serialization between the read and the
+// write. Two exactly-simultaneous first-ever logins could both become Admin, and two
+// simultaneous demotions of different Admins could in principle strand zero Admins.
+// PalPanel is a single-operator panel behind Cloudflare Access with a handful of
+// users, so the race window isn't worth locking complexity yet; revisit if this
+// ever becomes multi-operator.
+public class RoleService(IDbContextFactory<PanelDb> factory, IEventSink events, RoleChangeNotifier notifier)
 {
     public static readonly string[] ValidRoles = ["Admin", "Viewer", "Blocked"];
 
@@ -54,6 +62,7 @@ public class RoleService(IDbContextFactory<PanelDb> factory, IEventSink events)
         user.Role = role;
         await db.SaveChangesAsync();
         await events.LogAsync("role-change", $"{email}: {oldRole} -> {role}", actor);
+        notifier.Notify(email, role); // live circuits react immediately (Blocked loses UI now)
     }
 
     public async Task<IReadOnlyList<PanelUser>> ListAsync()

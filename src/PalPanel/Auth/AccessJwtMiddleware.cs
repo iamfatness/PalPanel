@@ -17,12 +17,14 @@ public class AccessJwtMiddleware
 
     private readonly RequestDelegate _next;
     private readonly PanelOptions _options;
+    private readonly ILogger<AccessJwtMiddleware> _logger;
     private readonly ConfigurationManager<OpenIdConnectConfiguration>? _configManager;
 
-    public AccessJwtMiddleware(RequestDelegate next, IOptions<PanelOptions> options)
+    public AccessJwtMiddleware(RequestDelegate next, IOptions<PanelOptions> options, ILogger<AccessJwtMiddleware> logger)
     {
         _next = next;
         _options = options.Value;
+        _logger = logger;
         if (!_options.AuthDisabled && !string.IsNullOrWhiteSpace(_options.AccessTeamDomain))
         {
             _configManager = new ConfigurationManager<OpenIdConnectConfiguration>(
@@ -53,8 +55,19 @@ public class AccessJwtMiddleware
         {
             email = await ValidateAsync(headerValues.ToString(), context.RequestAborted);
         }
-        catch
+        catch (SecurityTokenException)
         {
+            // Expected failure class: bad signature, wrong iss/aud, expired, missing
+            // email claim. Routine under attack or after Access session expiry — 401,
+            // no log spam.
+            await Unauthorized(context);
+            return;
+        }
+        catch (Exception ex)
+        {
+            // Unexpected failure (JWKS endpoint unreachable, misconfiguration, bugs).
+            // Still fail closed with 401, but log it loudly so it's diagnosable.
+            _logger.LogError(ex, "Unexpected error validating Cloudflare Access JWT");
             await Unauthorized(context);
             return;
         }
@@ -78,27 +91,64 @@ public class AccessJwtMiddleware
             throw new InvalidOperationException("Panel:AccessTeamDomain is not configured");
 
         var config = await _configManager.GetConfigurationAsync(ct);
-        var validationParameters = new TokenValidationParameters
-        {
-            ValidIssuer = _options.AccessTeamDomain,
-            ValidAudience = _options.AccessAud,
-            IssuerSigningKeys = config.SigningKeys,
-            ValidateLifetime = true,
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateIssuerSigningKey = true,
-        };
-
         var handler = new JsonWebTokenHandler();
-        var result = await handler.ValidateTokenAsync(token, validationParameters);
+        var result = await handler.ValidateTokenAsync(token, BuildValidationParameters(config));
+
+        if (!result.IsValid && IsSigningKeyFailure(result.Exception))
+        {
+            // Key-rotation path: Cloudflare rotates the Access signing key periodically,
+            // and a token signed with the new key won't match our cached JWKS. Request a
+            // refresh and retry validation exactly once.
+            //
+            // ConfigurationManager (IdentityModel 8.x) refreshes in the BACKGROUND:
+            // after RequestRefresh(), the next GetConfigurationAsync() returns the stale
+            // config and kicks off the fetch; the fresh config appears on a later call
+            // (empirically ~50ms with a local JWKS host). So we poll briefly — bounded
+            // at ~2s — for a new configuration instance, then retry once with whatever
+            // we have and fail closed on 401 if it still doesn't validate.
+            //
+            // DoS note: RequestRefresh() is rate-limited internally by
+            // ConfigurationManager (RefreshInterval floor, default 5 minutes), so
+            // attackers spamming garbage signatures cannot make us hammer the JWKS
+            // endpoint — we rely on that built-in floor rather than adding our own
+            // throttle. The bounded poll only costs the attacker's own request latency.
+            _configManager.RequestRefresh();
+            var stale = config;
+            config = await _configManager.GetConfigurationAsync(ct); // stale; starts background fetch
+            for (var i = 0; i < 40 && ReferenceEquals(config, stale); i++)
+            {
+                await Task.Delay(50, ct);
+                config = await _configManager.GetConfigurationAsync(ct);
+            }
+            result = await handler.ValidateTokenAsync(token, BuildValidationParameters(config));
+        }
+
         if (!result.IsValid)
-            throw result.Exception ?? new SecurityTokenException("token validation failed");
+            throw result.Exception as SecurityTokenException
+                ?? new SecurityTokenException("token validation failed", result.Exception);
 
         var email = result.ClaimsIdentity.FindFirst("email")?.Value;
         if (string.IsNullOrWhiteSpace(email))
             throw new SecurityTokenException("token is missing the email claim");
         return email;
     }
+
+    private TokenValidationParameters BuildValidationParameters(OpenIdConnectConfiguration config) => new()
+    {
+        ValidIssuer = _options.AccessTeamDomain,
+        ValidAudience = _options.AccessAud,
+        IssuerSigningKeys = config.SigningKeys,
+        ValidAlgorithms = [SecurityAlgorithms.RsaSha256], // pin RS256: reject alg-confusion tokens
+        ValidateLifetime = true,
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateIssuerSigningKey = true,
+    };
+
+    // Only signature/key-resolution failures should trigger a JWKS refresh; wrong
+    // audience, wrong issuer, or expired tokens fail for reasons fresh keys can't fix.
+    private static bool IsSigningKeyFailure(Exception? ex) =>
+        ex is SecurityTokenSignatureKeyNotFoundException or SecurityTokenInvalidSignatureException;
 
     private static Task Unauthorized(HttpContext context)
     {

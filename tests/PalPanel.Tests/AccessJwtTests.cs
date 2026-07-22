@@ -110,6 +110,49 @@ public class AccessJwtTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
     }
 
+    // Key-rotation ordering note: we prove refresh-on-rotation by (1) caching the JWKS
+    // via a successful request signed with key A, (2) rotating the stub to key B, then
+    // (3) sending a token signed with B and expecting 200 — which can only succeed if
+    // the middleware detected the signature-key miss, called RequestRefresh(), refetched
+    // the JWKS, and retried validation. We deliberately do NOT use the "401 first, then
+    // swap the stub, then expect 200" ordering: ConfigurationManager honors the FIRST
+    // RequestRefresh() immediately but rate-limits subsequent ones (RefreshInterval
+    // floor, default 5 min), so a test that burns the first refresh on a guaranteed 401
+    // would flake. This ordering mirrors the real production scenario (Cloudflare
+    // rotates; the next request carries a token signed with the new key) and needs no
+    // test-only knobs in production code.
+    [Fact]
+    public async Task KeyRotation_RefreshesJwks_AndValidatesWithoutRestart()
+    {
+        var tokenA = _jwks.IssueToken(_jwks.BaseUrl, Aud, "rotate@x.com");
+        var respA = await ClientWithToken(tokenA).GetAsync("/healthz");
+        Assert.Equal(HttpStatusCode.OK, respA.StatusCode); // JWKS with key A is now cached
+
+        _jwks.RotateKey(); // Cloudflare rotates: certs endpoint now serves only key B
+
+        var tokenB = _jwks.IssueToken(_jwks.BaseUrl, Aud, "rotate@x.com");
+        var respB = await ClientWithToken(tokenB).GetAsync("/healthz");
+        Assert.Equal(HttpStatusCode.OK, respB.StatusCode); // requires refresh + retry, not a 24h lockout
+    }
+
+    [Fact]
+    public async Task AfterRotation_StaleTokenSignedWithOldKey_Returns401()
+    {
+        // Cache key A, mint a token with it, rotate to key B, and move the middleware's
+        // cache to B via a valid new-key request. The stale old-key token must then 401:
+        // the refresh-retry path must fail closed, not resurrect retired keys.
+        var tokenA = _jwks.IssueToken(_jwks.BaseUrl, Aud, "rotate2@x.com");
+        Assert.Equal(HttpStatusCode.OK, (await ClientWithToken(tokenA).GetAsync("/healthz")).StatusCode);
+        var staleToken = _jwks.IssueToken(_jwks.BaseUrl, Aud, "rotate2@x.com");
+
+        _jwks.RotateKey();
+        var tokenB = _jwks.IssueToken(_jwks.BaseUrl, Aud, "rotate2@x.com");
+        Assert.Equal(HttpStatusCode.OK, (await ClientWithToken(tokenB).GetAsync("/healthz")).StatusCode);
+
+        var resp = await ClientWithToken(staleToken).GetAsync("/healthz");
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
+    }
+
     [Fact]
     public async Task BlockedUser_Returns403()
     {

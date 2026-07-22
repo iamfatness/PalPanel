@@ -32,6 +32,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PollerService>());
 builder.Services.AddHostedService(sp => new RetentionService(
     sp.GetRequiredService<IDbContextFactory<PalPanel.Data.PanelDb>>(),
     sp.GetRequiredService<ILogger<RetentionService>>()));
+builder.Services.AddSingleton<RoleChangeNotifier>();
 builder.Services.AddSingleton<RoleService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddCascadingAuthenticationState();

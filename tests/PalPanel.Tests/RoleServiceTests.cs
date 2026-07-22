@@ -5,7 +5,7 @@ using PalPanel.Data;
 
 public class RoleServiceTests
 {
-    private static RoleService MakeRoleService()
+    private static (RoleService Rs, IDbContextFactory<PanelDb> Dbf, RoleChangeNotifier Notifier) MakeRoleServiceWithDb()
     {
         var services = new ServiceCollection();
         services.AddDbContextFactory<PanelDb>(b => b.UseSqlite($"Data Source={Path.GetTempFileName()}"));
@@ -13,8 +13,11 @@ public class RoleServiceTests
         var sp = services.BuildServiceProvider();
         var dbf = sp.GetRequiredService<IDbContextFactory<PanelDb>>();
         using (var db = dbf.CreateDbContext()) db.Database.EnsureCreated();
-        return new RoleService(dbf, sp.GetRequiredService<IEventSink>());
+        var notifier = new RoleChangeNotifier();
+        return (new RoleService(dbf, sp.GetRequiredService<IEventSink>(), notifier), dbf, notifier);
     }
+
+    private static RoleService MakeRoleService() => MakeRoleServiceWithDb().Rs;
 
     [Fact]
     public async Task FirstUser_BecomesAdmin_SecondBecomesViewer()
@@ -41,14 +44,19 @@ public class RoleServiceTests
     [Fact]
     public async Task GetOrCreate_UpdatesLastSeen()
     {
-        var rs = MakeRoleService();
-        var first = await rs.GetOrCreateAsync("owner@x.com");
-        var firstSeen = first.Role; // sanity - Admin
-        Assert.Equal("Admin", firstSeen);
-        await Task.Delay(10);
-        // second call should not throw and should keep same identity/role
-        var second = await rs.GetOrCreateAsync("owner@x.com");
-        Assert.Equal("Admin", second.Role);
+        var (rs, dbf, _) = MakeRoleServiceWithDb();
+        await rs.GetOrCreateAsync("owner@x.com");
+        DateTimeOffset initialLastSeen;
+        using (var db = dbf.CreateDbContext())
+            initialLastSeen = db.Users.Single(u => u.Email == "owner@x.com").LastSeen;
+
+        await Task.Delay(20); // ensure the clock advances past SQLite's stored precision
+        await rs.GetOrCreateAsync("owner@x.com");
+
+        using var check = dbf.CreateDbContext();
+        var updatedLastSeen = check.Users.Single(u => u.Email == "owner@x.com").LastSeen;
+        Assert.True(updatedLastSeen > initialLastSeen,
+            $"LastSeen should advance on revisit (was {initialLastSeen:O}, now {updatedLastSeen:O})");
     }
 
     [Fact]
@@ -61,14 +69,31 @@ public class RoleServiceTests
     }
 
     [Fact]
+    public async Task SetRoleAsync_FiresRoleChangeNotifier()
+    {
+        var (rs, _, notifier) = MakeRoleServiceWithDb();
+        await rs.GetOrCreateAsync("owner@x.com");
+        await rs.GetOrCreateAsync("friend@x.com");
+
+        (string Email, string Role)? seen = null;
+        notifier.RoleChanged += (email, role) => seen = (email, role);
+        await rs.SetRoleAsync("friend@x.com", "Blocked", "owner@x.com");
+
+        Assert.Equal(("friend@x.com", "Blocked"), seen);
+    }
+
+    [Fact]
     public async Task SetRoleAsync_LogsRoleChangeEvent()
     {
-        var rs = MakeRoleService();
+        var (rs, dbf, _) = MakeRoleServiceWithDb();
         await rs.GetOrCreateAsync("owner@x.com");
         await rs.GetOrCreateAsync("friend@x.com");
         await rs.SetRoleAsync("friend@x.com", "Admin", "owner@x.com");
 
-        var list = await rs.ListAsync();
-        Assert.Contains(list, u => u.Email == "friend@x.com" && u.Role == "Admin");
+        using var db = dbf.CreateDbContext();
+        var evt = db.Events.Single(e => e.Type == "role-change");
+        Assert.Equal("owner@x.com", evt.ActorEmail);
+        Assert.Contains("friend@x.com", evt.Detail);
+        Assert.Contains("Admin", evt.Detail);
     }
 }
