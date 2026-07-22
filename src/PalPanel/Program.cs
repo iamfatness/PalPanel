@@ -19,6 +19,7 @@ builder.Services.AddSingleton<PalPanel.Data.IEventSink, PalPanel.Data.DbEventSin
 builder.Services.AddSingleton<SnapshotService>();
 builder.Services.AddSingleton<PollerService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PollerService>());
+builder.Services.AddHostedService(sp => new RetentionService(sp.GetRequiredService<IDbContextFactory<PalPanel.Data.PanelDb>>()));
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 
 var app = builder.Build();
