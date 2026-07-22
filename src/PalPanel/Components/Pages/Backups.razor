@@ -1,0 +1,109 @@
+@page "/backups"
+@using PalPanel.Control
+@using PalPanel.Supervisor
+@implements IDisposable
+@inject IBackupService BackupSvc
+@inject ProcessSupervisor Sup
+@inject AuthenticationStateProvider AuthState
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Backups</PageTitle>
+
+<AuthorizeView Roles="Admin">
+    <Authorized>
+
+        <h1>Backups</h1>
+
+        @if (_error is not null)
+        {
+            <div class="alert">@_error</div>
+        }
+
+        <div class="actions">
+            <button disabled="@_busy" @onclick="BackUpNowAsync">Back up now</button>
+        </div>
+
+        @if (_state != ServerState.Stopped)
+        {
+            <p class="stat-sub">Restore is only available while the server is stopped (current state: @_state).</p>
+        }
+
+        <table class="data-table">
+            <thead>
+                <tr><th>File</th><th>Size (MB)</th><th>Created</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var b in _backups)
+                {
+                    <tr>
+                        <td>@b.FileName</td>
+                        <td>@((b.SizeBytes / 1_048_576.0).ToString("0.0"))</td>
+                        <td>@b.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                        <td>
+                            <a href="@($"/backups/download/{b.FileName}")">Download</a>
+                            <button disabled="@(_busy || _state != ServerState.Stopped)"
+                                    @onclick="() => ConfirmRestoreAsync(b)">Restore</button>
+                        </td>
+                    </tr>
+                }
+                @if (_backups.Count == 0)
+                {
+                    <tr><td colspan="4">No backups yet.</td></tr>
+                }
+            </tbody>
+        </table>
+
+        <ConfirmDialog @ref="_confirm" />
+
+    </Authorized>
+    <NotAuthorized>
+        <p>Admin access required.</p>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private IReadOnlyList<BackupInfo> _backups = [];
+    private ServerState _state;
+    private string _email = "";
+    private bool _busy;
+    private string? _error;
+    private ConfirmDialog _confirm = null!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _state = Sup.State;
+        Sup.StateChanged += OnStateChanged;
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        Refresh();
+    }
+
+    private void Refresh() => _backups = BackupSvc.List();
+
+    private void OnStateChanged(ServerState s)
+    {
+        InvokeAsync(() => { _state = s; StateHasChanged(); });
+    }
+
+    private async Task BackUpNowAsync()
+    {
+        _busy = true; _error = null;
+        try { await BackupSvc.CreateBackupAsync($"manual ({_email})", CancellationToken.None); Refresh(); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task ConfirmRestoreAsync(BackupInfo b)
+    {
+        if (!await _confirm.Show($"Restore {b.FileName}?",
+            "Restores this world save. Only allowed while the server is stopped. Current save is snapshotted first."))
+            return;
+
+        _busy = true; _error = null;
+        try { await BackupSvc.RestoreAsync(b.FileName, CancellationToken.None); Refresh(); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    public void Dispose() => Sup.StateChanged -= OnStateChanged;
+}

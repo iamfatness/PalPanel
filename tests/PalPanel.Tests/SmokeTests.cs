@@ -38,4 +38,29 @@ public class SmokeTests(WebApplicationFactory<Program> factory) : IClassFixture<
         var html = await resp.Content.ReadAsStringAsync();
         Assert.Contains("History", html);
     }
+
+    [Fact]
+    public async Task Backups_RendersWithAuthDisabled()
+    {
+        var client = factory.WithWebHostBuilder(b =>
+            b.UseSetting("Panel:AuthDisabled", "true")
+             .UseSetting("Panel:DbPath", Path.GetTempFileName())
+             .UseSetting("Panel:BackupDirectory", Directory.CreateTempSubdirectory().FullName)).CreateClient();
+        var resp = await client.GetAsync("/backups");
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+        var html = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("Backups", html);
+    }
+
+    [Fact]
+    public async Task Settings_RendersWithAuthDisabled()
+    {
+        var client = factory.WithWebHostBuilder(b =>
+            b.UseSetting("Panel:AuthDisabled", "true")
+             .UseSetting("Panel:DbPath", Path.GetTempFileName())).CreateClient();
+        var resp = await client.GetAsync("/settings");
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+        var html = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("Schedules", html);
+    }
 }

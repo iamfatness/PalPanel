@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using PalPanel.Auth;
 using PalPanel.Components;
 using PalPanel.Monitoring;
@@ -63,6 +64,28 @@ app.UseStaticFiles();
 app.UseMiddleware<AccessJwtMiddleware>();
 app.UseAntiforgery();
 app.MapGet("/healthz", () => "ok");
+
+// Admin-only backup download. Mapped after AccessJwtMiddleware so ctx.Items["PanelPrincipal"]
+// is always populated (or the middleware has already 401'd). The physical path is built ONLY
+// from the matched BackupInfo.FileName (never the raw route-value `file`) — List() only ever
+// enumerates *.zip actually present in BackupDirectory, so this can't be steered off that
+// directory or onto an arbitrary name, unlike Path.Combine(dir, file) with the raw input.
+app.MapGet("/backups/download/{file}", (string file, PalPanel.Control.IBackupService backups,
+    HttpContext ctx, IOptions<PalPanel.PanelOptions> opts) =>
+{
+    // Results.Forbid() calls HttpContext.ForbidAsync(), which requires a registered
+    // IAuthenticationService (AddAuthentication()) — this app has none, since
+    // AccessJwtMiddleware validates the Cf-Access-Jwt-Assertion header itself rather than
+    // going through the ASP.NET Core authentication handler pipeline. A plain 403 status
+    // code needs no such service and matches how AccessJwtMiddleware itself signals 401/403.
+    if (ctx.Items["PanelPrincipal"] is not PalPanel.Auth.PanelPrincipal p || p.Role != "Admin")
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+    var info = backups.List().FirstOrDefault(b => b.FileName == file);
+    if (info is null) return Results.NotFound();
+    var path = Path.Combine(opts.Value.BackupDirectory, info.FileName);
+    return Results.File(path, "application/zip", info.FileName);
+});
+
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 app.Run();
 
