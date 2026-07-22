@@ -39,7 +39,11 @@ public class BackupService(IOptions<PanelOptions> opts, ProcessSupervisor sup, I
             if (File.Exists(tempPath)) File.Delete(tempPath);
         }
 
-        Prune();
+        // Prune failures are loud (event) but never fatal: the backup itself succeeded.
+        var pruneFailures = Prune();
+        if (pruneFailures.Count > 0)
+            await events.LogAsync("backup-prune-failed",
+                $"Could not delete stale backup(s): {string.Join(", ", pruneFailures)}");
         await events.LogAsync("backup", $"Backup created: {Path.GetFileName(finalPath)} ({reason})");
         return finalPath;
     }
@@ -50,15 +54,21 @@ public class BackupService(IOptions<PanelOptions> opts, ProcessSupervisor sup, I
         return sanitized.Length > 40 ? sanitized[..40] : sanitized;
     }
 
-    private void Prune()
+    // Best-effort per file: one undeletable stale zip (locked, ACL-denied) must not fail
+    // the backup that just succeeded. Returns the names that could not be deleted so the
+    // caller can log a single loud backup-prune-failed event.
+    private List<string> Prune()
     {
+        var failures = new List<string>();
         var all = List();
-        if (all.Count <= _o.BackupsToKeep) return;
+        if (all.Count <= _o.BackupsToKeep) return failures;
         foreach (var stale in all.Skip(_o.BackupsToKeep))
         {
             try { File.Delete(Path.Combine(_o.BackupDirectory, stale.FileName)); }
-            catch (IOException) { /* best-effort prune; next pass retries */ }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { failures.Add(stale.FileName); }
         }
+        return failures;
     }
 
     public IReadOnlyList<BackupInfo> List()
@@ -80,31 +90,46 @@ public class BackupService(IOptions<PanelOptions> opts, ProcessSupervisor sup, I
             throw new InvalidOperationException("Invalid backup file name.");
 
         var fullPath = Path.GetFullPath(Path.Combine(_o.BackupDirectory, fileName));
-        var backupDirFull = Path.GetFullPath(_o.BackupDirectory);
+        // Containment check against "dir + separator" so a sibling like "...\Backups2\x.zip"
+        // can never pass a bare StartsWith("...\Backups") prefix test.
+        var backupDirFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_o.BackupDirectory))
+                            + Path.DirectorySeparatorChar;
         if (!fullPath.StartsWith(backupDirFull, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
             throw new InvalidOperationException("Invalid backup file name.");
 
+        // Work from a side copy: the pre-restore snapshot below prunes the retention window,
+        // and at the cap the evicted "oldest" backup can be exactly the zip being restored.
+        // The side copy also makes the restore immune to any concurrent prune.
+        var sideCopy = Path.Combine(Path.GetTempPath(), $"palpanel-restore-{Guid.NewGuid():N}.zip");
         try
         {
-            await CreateBackupAsync("pre-restore", ct);
-
-            if (Directory.Exists(_o.SaveDirectory))
+            File.Copy(fullPath, sideCopy);
+            try
             {
-                foreach (var file in Directory.GetFiles(_o.SaveDirectory)) File.Delete(file);
-                foreach (var dir in Directory.GetDirectories(_o.SaveDirectory)) Directory.Delete(dir, true);
-            }
-            else
-            {
-                Directory.CreateDirectory(_o.SaveDirectory);
-            }
+                await CreateBackupAsync("pre-restore", ct);
 
-            ZipFile.ExtractToDirectory(fullPath, _o.SaveDirectory);
-            await events.LogAsync("restore", $"Restored from {fileName}");
+                if (Directory.Exists(_o.SaveDirectory))
+                {
+                    foreach (var file in Directory.GetFiles(_o.SaveDirectory)) File.Delete(file);
+                    foreach (var dir in Directory.GetDirectories(_o.SaveDirectory)) Directory.Delete(dir, true);
+                }
+                else
+                {
+                    Directory.CreateDirectory(_o.SaveDirectory);
+                }
+
+                ZipFile.ExtractToDirectory(sideCopy, _o.SaveDirectory);
+                await events.LogAsync("restore", $"Restored from {fileName}");
+            }
+            catch (Exception ex)
+            {
+                await events.LogAsync("restore-failed", $"Restore from {fileName} failed: {ex.Message}");
+                throw;
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            await events.LogAsync("restore-failed", $"Restore from {fileName} failed: {ex.Message}");
-            throw;
+            if (File.Exists(sideCopy)) File.Delete(sideCopy);
         }
     }
 }
