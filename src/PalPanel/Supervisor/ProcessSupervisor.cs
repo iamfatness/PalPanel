@@ -43,8 +43,7 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
             _stopRequested = false; EnsureTracker(); _crashes.Reset(); _restartAttempt = 0;
             SetState(ServerState.Starting);
         }
-        LaunchAndWatch();
-        await Task.CompletedTask;
+        await LaunchAndWatchOrHoldAsync();
     }
 
     public void MarkRunning()
@@ -82,6 +81,20 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
         var exeDir = Path.GetDirectoryName(_o.ServerExePath) ?? ".";
         _proc = launcher.Launch(_o.ServerExePath, _o.ServerArgs, exeDir);
         Watch(_proc);
+    }
+
+    // Loud launch: a failed Launch (bad exe path, access denied, ...) must never
+    // leave the supervisor stuck in Starting with nothing watching. It fires
+    // "launch-failed" and lands in Held — manual intervention required.
+    private async Task LaunchAndWatchOrHoldAsync()
+    {
+        Exception? err = null;
+        lock (_lock)
+        {
+            try { LaunchAndWatch(); }
+            catch (Exception ex) { err = ex; SetState(ServerState.Held); }
+        }
+        if (err is not null) await Fire("launch-failed", err.Message);
     }
 
     // Note: deliberately NOT wrapped in Task.Run (which would hop to a threadpool
@@ -122,16 +135,27 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
         {
             EnsureTracker();
             await Fire("crash", "PalServer exited unexpectedly");
-            if (_crashes.RecordCrashAndCheckHold(DateTimeOffset.UtcNow))
+            bool held;
+            lock (_lock)
             {
-                RunningSince = null; SetState(ServerState.Held);
+                held = _crashes.RecordCrashAndCheckHold(DateTimeOffset.UtcNow);
+                if (held) { RunningSince = null; SetState(ServerState.Held); }
+                else SetState(ServerState.Crashed);
+            }
+            if (held)
+            {
                 await Fire("held", $"{_o.MaxCrashesInWindow} crashes in {_o.CrashWindowMinutes} min — auto-restart held");
                 return;
             }
-            SetState(ServerState.Crashed);
             await RestartDelay(_restartAttempt++);
-            SetState(ServerState.Starting);
-            LaunchAndWatch();
+            lock (_lock)
+            {
+                // A stop that arrived during the backoff is terminal: StopAsync
+                // owns the transition to Stopped; do not relaunch behind it.
+                if (_stopRequested) return;
+                SetState(ServerState.Starting);
+            }
+            await LaunchAndWatchOrHoldAsync();
         }
         finally { tcs.TrySetResult(); }
     }
