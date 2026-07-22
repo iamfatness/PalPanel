@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.EntityFrameworkCore;
+using PalPanel.Auth;
 using PalPanel.Components;
 using PalPanel.Monitoring;
 using PalPanel.PalApi;
@@ -30,6 +32,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PollerService>());
 builder.Services.AddHostedService(sp => new RetentionService(
     sp.GetRequiredService<IDbContextFactory<PalPanel.Data.PanelDb>>(),
     sp.GetRequiredService<ILogger<RetentionService>>()));
+builder.Services.AddSingleton<RoleService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddAuthorization();
+builder.Services.AddScoped<AuthenticationStateProvider, HttpContextAuthStateProvider>();
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 
 var app = builder.Build();
@@ -51,7 +58,9 @@ supervisor.OnEvent = async (t, d) =>
 supervisor.AdoptExistingIfRunning();
 
 app.UseStaticFiles();
+app.UseMiddleware<AccessJwtMiddleware>();
 app.UseAntiforgery();
+app.MapGet("/healthz", () => "ok");
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 app.Run();
 
