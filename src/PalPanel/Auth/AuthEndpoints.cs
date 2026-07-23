@@ -26,8 +26,9 @@ public static class AuthEndpoints
 {
     // Server-side minimum password length for setup. The Razor form also sets minlength=8, but
     // that's a client-side convenience only (trivially bypassed by POSTing directly), so the
-    // real enforcement lives here.
-    private const int MinPasswordLength = 8;
+    // real enforcement lives here. Internal (not private) so UserAdminService and the
+    // change-password endpoint share the exact same policy rather than duplicating the literal.
+    internal const int MinPasswordLength = 8;
 
     public static void MapAuthEndpoints(this WebApplication app)
     {
@@ -36,6 +37,11 @@ public static class AuthEndpoints
         app.MapPost("/auth/setup", SetupAsync).AllowAnonymous();
         app.MapGet("/auth/google", GoogleChallenge).AllowAnonymous();
         app.MapGet("/auth/google-complete", GoogleCompleteAsync).AllowAnonymous();
+        // Deliberately NOT .AllowAnonymous(): this is the one auth endpoint that requires an
+        // already-signed-in user (the global FallbackPolicy in Program.cs -- RequireAuthenticatedUser
+        // -- is exactly the gate we want here), unlike login/setup/logout which must work
+        // without a session.
+        app.MapPost("/auth/change-password", ChangePasswordAsync);
     }
 
     // Starts the Google OAuth handshake. RedirectUri points back at OUR OWN completion endpoint
@@ -280,6 +286,60 @@ public static class AuthEndpoints
 
         await SignInUserAsync(ctx, user);
         await events.LogAsync("setup-owner-created", $"email={normalizedEmail}", normalizedEmail);
+        return Results.Redirect("/");
+    }
+
+    // Self-service password change/set. Reached two ways: (1) a user with MustChangePassword
+    // (an admin created them with an initial password, or reset an existing password) is
+    // redirected here straight from /auth/login and MUST be able to set a new password WITHOUT
+    // knowing a "current" one -- they just proved control of the account via the temporary
+    // password at login. (2) a normal signed-in user visiting /change-password voluntarily MUST
+    // prove they still hold the current password before it's replaced, exactly like any other
+    // account-settings password change, so a hijacked-but-unlocked browser session alone isn't
+    // enough to lock the real owner out.
+    private static async Task<IResult> ChangePasswordAsync(
+        HttpContext ctx,
+        IDbContextFactory<PanelDb> factory,
+        IPasswordService passwords,
+        IEventSink events,
+        [FromForm] string? currentPassword,
+        [FromForm] string newPassword,
+        [FromForm] string? confirmPassword)
+    {
+        var email = ctx.User.FindFirst(ClaimTypes.Email)?.Value;
+        if (string.IsNullOrWhiteSpace(email))
+            return Results.Redirect("/login");
+
+        await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email, ctx.RequestAborted);
+        if (user is null)
+            return Results.Redirect("/login");
+
+        if (!user.MustChangePassword)
+        {
+            // Not a forced reset -- the caller must prove they hold the CURRENT password.
+            // A Google-only user (PasswordHash null) has nothing to verify against, so this
+            // always fails for them too, which is correct: they have no self-service path to
+            // set a first password here, only an admin's SetPasswordAsync can do that.
+            if (string.IsNullOrEmpty(currentPassword)
+                || string.IsNullOrEmpty(user.PasswordHash)
+                || !passwords.Verify(user.PasswordHash, currentPassword))
+            {
+                await events.LogAsync("password-change-failed", $"email={email} reason=bad-current", email);
+                return Results.Redirect("/change-password?error=1");
+            }
+        }
+
+        if (string.IsNullOrEmpty(newPassword) || newPassword.Length < MinPasswordLength || newPassword != confirmPassword)
+        {
+            await events.LogAsync("password-change-failed", $"email={email} reason=invalid-new", email);
+            return Results.Redirect("/change-password?error=1");
+        }
+
+        user.PasswordHash = passwords.Hash(newPassword);
+        user.MustChangePassword = false;
+        await db.SaveChangesAsync(ctx.RequestAborted);
+        await events.LogAsync("password-changed", $"email={email}", email);
         return Results.Redirect("/");
     }
 
