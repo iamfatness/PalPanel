@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using PalPanel.Data;
 
 namespace PalPanel.Tests;
 
@@ -43,6 +46,19 @@ public class AuthPipelineTests
     public async Task AuthEnabled_NoCookie_RedirectsToLogin()
     {
         await using var factory = MakeFactory(authDisabled: false);
+
+        // A user must already exist, otherwise SetupGateMiddleware (Task 4) wins over the
+        // ordinary "no cookie" challenge and redirects to /setup instead of /login -- that
+        // first-run behavior has its own dedicated coverage in AuthEndpointsTests. This test's
+        // subject is specifically "authenticated required once the app is past first-run".
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbf = scope.ServiceProvider.GetRequiredService<IDbContextFactory<PalPanel.Data.PanelDb>>();
+            await using var db = await dbf.CreateDbContextAsync();
+            db.Users.Add(new PanelUser { Email = "owner@x.com", Role = "Admin", FirstSeen = DateTimeOffset.UtcNow, LastSeen = DateTimeOffset.UtcNow });
+            await db.SaveChangesAsync();
+        }
+
         var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
 
         var resp = await client.GetAsync("/");

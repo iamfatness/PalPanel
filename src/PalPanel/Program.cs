@@ -43,6 +43,7 @@ builder.Services.AddHostedService(sp => new RetentionService(
     sp.GetRequiredService<ILogger<RetentionService>>()));
 builder.Services.AddSingleton<RoleChangeNotifier>();
 builder.Services.AddSingleton<RoleService>();
+builder.Services.AddSingleton<SetupGateState>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<AuthenticationStateProvider, HttpContextAuthStateProvider>();
@@ -181,8 +182,15 @@ app.UseWhen(
     }));
 
 app.UseAuthentication();
+
+// Must run after UseAuthentication (so ctx.User is populated) but BEFORE UseAuthorization: on
+// a fresh, user-less install this gate has to win over the global FallbackPolicy's own
+// "no cookie -> redirect /login" challenge, sending visitors to /setup instead.
+app.UseSetupGate();
+
 app.UseAuthorization();
 app.UseAntiforgery();
+app.MapAuthEndpoints();
 app.MapGet("/healthz", () => "ok").AllowAnonymous();
 
 // Admin-only backup download. Authorization here is now purely claims-based: the global

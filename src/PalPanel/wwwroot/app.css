@@ -318,6 +318,77 @@ select {
         margin-right: 0.5rem;
     }
 
+/* Login / setup */
+
+.login-shell {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.login-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    width: 100%;
+    max-width: 360px;
+}
+
+    .login-card form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin-top: 0.75rem;
+    }
+
+    .login-card label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        font-size: 0.85rem;
+        color: var(--text-dim);
+    }
+
+    .login-card input {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .login-card .alert {
+        color: var(--bad);
+        margin-bottom: 0.75rem;
+    }
+
+.login-hint {
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+
+.login-divider {
+    color: var(--text-dim);
+    text-align: center;
+    margin: 0.75rem 0;
+    font-size: 0.85rem;
+}
+
+.button-link {
+    display: block;
+    text-align: center;
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.9rem;
+    text-decoration: none;
+    color: var(--text);
+}
+
+    .button-link:hover {
+        border-color: var(--accent);
+    }
+
 /* Blazor built-in error UI */
 
 #blazor-error-ui {
