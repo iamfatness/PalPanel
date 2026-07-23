@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using PalPanel.Data;
@@ -33,6 +34,89 @@ public static class AuthEndpoints
         app.MapPost("/auth/login", LoginAsync).AllowAnonymous();
         app.MapPost("/auth/logout", LogoutAsync).AllowAnonymous();
         app.MapPost("/auth/setup", SetupAsync).AllowAnonymous();
+        app.MapGet("/auth/google", GoogleChallenge).AllowAnonymous();
+        app.MapGet("/auth/google-complete", GoogleCompleteAsync).AllowAnonymous();
+    }
+
+    // Starts the Google OAuth handshake. RedirectUri points back at OUR OWN completion endpoint
+    // (not "/") -- that's where the just-verified "External" ticket (see Program.cs's
+    // SignInScheme = "External") gets read and the allow-list decision actually happens.
+    private static IResult GoogleChallenge(string? returnUrl)
+    {
+        var safeReturnUrl = SafeReturnUrl(returnUrl);
+        var redirectUri = "/auth/google-complete";
+        if (safeReturnUrl != "/")
+            redirectUri += "?returnUrl=" + Uri.EscapeDataString(safeReturnUrl);
+
+        return Results.Challenge(
+            new AuthenticationProperties { RedirectUri = redirectUri },
+            [GoogleDefaults.AuthenticationScheme]);
+    }
+
+    // Runs after Google has verified the user and redirected back: reads the temp "External"
+    // ticket Google's handler signed in (see Program.cs), extracts the verified email claim, and
+    // hands off to CompleteGoogleSignInAsync for the actual allow-list decision. Deliberately thin
+    // -- everything testable without a real Google handshake lives in CompleteGoogleSignInAsync.
+    //
+    // returnUrl round-trips through the RedirectUri that GoogleChallenge set on the
+    // AuthenticationProperties, so it survives the full trip to Google and back. It's applied
+    // HERE (after the allow-list decision), rather than threaded into CompleteGoogleSignInAsync's
+    // own signature, so that method stays exactly the shape the testability requirement calls
+    // for (email + factory + events, no extra params) -- a denied sign-in still redirects to
+    // /login?denied=1 regardless of returnUrl; only the success case ("/") gets overridden.
+    private static async Task<IResult> GoogleCompleteAsync(
+        HttpContext ctx, IDbContextFactory<PanelDb> factory, IEventSink events, string? returnUrl)
+    {
+        var result = await ctx.AuthenticateAsync("External");
+        var email = result.Succeeded ? result.Principal?.FindFirst(ClaimTypes.Email)?.Value : null;
+
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            // No valid verified ticket at all (expired, tampered, or someone hitting this URL
+            // directly without going through /auth/google first) -- nothing to clean up beyond
+            // what CompleteGoogleSignInAsync itself always does, but there's no email to pass it,
+            // so deny here directly.
+            await ctx.SignOutAsync("External");
+            return Results.Redirect("/login?denied=1");
+        }
+
+        var outcome = await CompleteGoogleSignInAsync(ctx, email, factory, events);
+        if (outcome is Microsoft.AspNetCore.Http.HttpResults.RedirectHttpResult { Url: "/" } && !string.IsNullOrEmpty(returnUrl))
+            return Results.Redirect(SafeReturnUrl(returnUrl));
+        return outcome;
+    }
+
+    // The allow-list decision, pulled out into its own PUBLIC method so it's directly unit
+    // testable with a known/unknown/blocked email WITHOUT ever driving a real Google OAuth
+    // handshake (see GoogleAuthTests). Always signs out the temp "External" ticket first --
+    // it's single-use regardless of which way the decision goes.
+    public static async Task<IResult> CompleteGoogleSignInAsync(
+        HttpContext ctx, string email, IDbContextFactory<PanelDb> factory, IEventSink events)
+    {
+        await ctx.SignOutAsync("External");
+
+        var normalizedEmail = Normalize(email);
+
+        await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail, ctx.RequestAborted);
+
+        if (user is null)
+        {
+            await events.LogAsync("login-denied-unknown", $"email={normalizedEmail}", normalizedEmail);
+            return Results.Redirect("/login?denied=1");
+        }
+
+        if (user.Role == "Blocked")
+        {
+            await events.LogAsync("login-denied-blocked", $"email={normalizedEmail}", normalizedEmail);
+            return Results.Redirect("/login?denied=1");
+        }
+
+        user.LastSeen = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ctx.RequestAborted);
+        await SignInUserAsync(ctx, user);
+        await events.LogAsync("login-success", "method=google", user.Email);
+        return Results.Redirect("/");
     }
 
     private static async Task<IResult> LoginAsync(

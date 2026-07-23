@@ -71,6 +71,25 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         o.ExpireTimeSpan = TimeSpan.FromDays(builder.Configuration.GetValue("Panel:CookieDaysValid", 7));
         o.SlidingExpiration = true;
     })
+    .AddCookie("External", o =>
+    {
+        // Temp holding pen for a just-verified Google identity, BEFORE the allow-list decision
+        // (AuthEndpoints.CompleteGoogleSignInAsync) runs. Google's OAuthHandler (SignInScheme
+        // below) signs the verified ticket into THIS scheme rather than the app's own "Cookies"
+        // scheme -- otherwise every successful Google login would mint the real PalPanel.Auth
+        // session cookie unconditionally, before we ever get a chance to check the email against
+        // the Users table (unknown/Blocked emails would be signed in first and rejected never).
+        // Short-lived and single-use: /auth/google-complete reads it once and immediately signs
+        // it back out, whichever way the allow-list decision goes.
+        o.Cookie.Name = "PalPanel.External";
+        o.Cookie.HttpOnly = true;
+        o.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        // SameSite=None (not Lax like the app cookie): this cookie must survive the top-level
+        // redirect BACK from accounts.google.com to our /signin-google callback, which is a
+        // cross-site navigation from the browser's perspective.
+        o.Cookie.SameSite = SameSiteMode.None;
+        o.ExpireTimeSpan = TimeSpan.FromMinutes(10);
+    })
     .AddGoogle(o =>
     {
         // OAuthOptions.Validate() runs EAGERLY on every request, not just when Google's
@@ -92,6 +111,11 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         o.CallbackPath = "/signin-google"; // must match the Google OAuth client's redirect URI
         o.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
         o.CorrelationCookie.SameSite = SameSiteMode.None;
+        // See the "External" AddCookie registration above: without this, RemoteAuthenticationHandler
+        // would sign the verified Google ticket straight into the DEFAULT scheme (our app's own
+        // "Cookies" scheme, since no SignInScheme was set and AddAuthentication's default scheme
+        // is Cookies), handing out a real PalPanel.Auth session before the allow-list ever runs.
+        o.SignInScheme = "External";
     });
 
 builder.Services.AddAuthorization(o =>
