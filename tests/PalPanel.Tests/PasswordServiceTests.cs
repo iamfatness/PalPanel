@@ -28,6 +28,13 @@ public class PasswordServiceTests
         Assert.Equal(LoginOutcome.Locked, r.Outcome); Assert.Equal(T0.AddMinutes(15), u.LockedUntil);
     }
 
+    [Fact] public void CheckPassword_FailureBelowThreshold_IncrementsNoLock()
+    {
+        var u = new PanelUser { Email="a@b.c", PasswordHash=_svc.Hash("pw"), FailedLoginCount=1 };
+        var r = _svc.CheckPassword(u, "wrong", T0);
+        Assert.Equal(LoginOutcome.BadCredentials, r.Outcome); Assert.Equal(2, u.FailedLoginCount); Assert.Null(u.LockedUntil); Assert.True(r.MutatedUser);
+    }
+
     [Fact] public void CheckPassword_WhileLocked_ReturnsLocked_NoMutation()
     {
         var u = new PanelUser { Email="a@b.c", PasswordHash=_svc.Hash("pw"), LockedUntil=T0.AddMinutes(5) };

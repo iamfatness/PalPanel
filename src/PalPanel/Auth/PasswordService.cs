@@ -25,17 +25,22 @@ public class PasswordService : IPasswordService
     public bool Verify(string hash, string password)
     {
         if (string.IsNullOrEmpty(hash)) return false;
+        if (string.IsNullOrEmpty(password)) return false;
+
+        PasswordVerificationResult result;
         try
         {
-            var result = _hasher.VerifyHashedPassword(DummyUser, hash, password);
-            return result == PasswordVerificationResult.Success || result == PasswordVerificationResult.SuccessRehashNeeded;
+            // Scope the catch tightly to the verify call: a malformed stored hash surfaces as
+            // FormatException (base64 decode) and must be treated as a failed login, not thrown.
+            // We deliberately do NOT swallow other exception types here — those indicate a real
+            // caller/programming bug and should surface rather than masquerade as bad credentials.
+            result = _hasher.VerifyHashedPassword(DummyUser, hash, password);
         }
-        catch (Exception)
+        catch (FormatException)
         {
-            // Malformed hash (e.g. FormatException from base64 decoding) must never throw
-            // out to the caller — treat it as a verification failure.
             return false;
         }
+        return result == PasswordVerificationResult.Success || result == PasswordVerificationResult.SuccessRehashNeeded;
     }
 
     public LoginCheck CheckPassword(PanelUser user, string password, DateTimeOffset now)
