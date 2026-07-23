@@ -25,8 +25,8 @@ Scripts and steps for building and installing PalPanel on the Palworld host
 
 3. Create `C:\PalPanel\app\appsettings.Local.json` with at least
    `Panel:AdminPassword`, `Panel:ServerExePath`, `Panel:SaveDirectory`,
-   `Panel:BackupDirectory` (and, once the Cloudflare Access app exists,
-   `Panel:AccessTeamDomain` / `Panel:AccessAud`) -- see
+   `Panel:BackupDirectory` (and, if using Google sign-in,
+   `Panel:GoogleClientId` / `Panel:GoogleClientSecret`) -- see
    `docs/setup-cloudflare.md` for the exact values for this box. This file
    is gitignored and must never be committed; it is the only place secrets
    live (no secrets in `appsettings.json`, ever).
@@ -60,19 +60,46 @@ step should be verified against the live dashboard, not assumed.
       the panel comes up. If PalServer.exe was stopped, use the dashboard's
       Start control and confirm it transitions `Stopped -> Starting ->
       Running`.
-- [ ] **Fresh login lands as Viewer**: from a phone on cellular data (not
-      the home Wi-Fi), open `https://panel.iamfatness.us` and sign in with a
-      Google account (or email OTP) that has never logged in before.
-      Confirm: Cloudflare Access login screen appears, login succeeds, and
-      the dashboard loads in **read-only** mode -- status/players/charts
-      visible, no Start/Stop/Restart/Kick/Ban/Settings controls.
+- [ ] **First-run setup creates the owner**: on a fresh install (empty
+      database), open `https://panel.iamfatness.us`. Confirm you land on
+      `/setup`, not `/login` or the dashboard. Create the owner account
+      (email + password). Confirm you're signed in immediately afterward and
+      land on the dashboard in full **Admin** mode -- and that browsing to
+      `/setup` again now redirects straight to `/login` instead of offering
+      to create a second owner.
+- [ ] **Owner adds a Google-only friend and a password friend**: from the
+      owner's Admin session, go to Settings -> Users and add two accounts:
+      one with a Google account's email and **no** password (Google-only),
+      one with an email and an initial password (password path). Both should
+      default to **Viewer**.
+- [ ] **Google path**: from a phone on cellular data (not the home Wi-Fi),
+      open `https://panel.iamfatness.us`, click "Sign in with Google", and
+      complete the flow with the Google account added above. Confirm it
+      signs straight in (no separate Cloudflare login screen -- PalPanel's
+      own login is the only gate) and the dashboard loads in **read-only**
+      Viewer mode -- no Start/Stop/Restart/Kick/Ban/Settings controls.
+- [ ] **Password path**: sign out, then sign in as the password friend using
+      the initial password. Confirm you're forced to `/change-password`
+      before reaching the dashboard, and that after setting a new password
+      you land on the dashboard as Viewer.
 - [ ] **Promote to Admin**: from the owner's own (Admin) session, go to
-      Settings -> Users and promote that Viewer account to Admin.
+      Settings -> Users and promote one of the two friend accounts to Admin.
 - [ ] **Admin controls work**: on the promoted (or owner's) Admin session,
       exercise each mutating control at least once: Announce (message shows
       in-game), Save, Kick a connected test player if available, and confirm
       each action is recorded in the History/event log with the acting
       user's email.
+- [ ] **Block revokes access**: from the owner's Admin session, set one
+      friend's role to **Blocked**. Confirm: if that friend has the panel
+      open in another browser/tab right now, their session loses the UI
+      immediately (no page reload needed); and if they try to sign in again
+      (either Google or password), the login is refused and they land back
+      on `/login?denied=1`.
+- [ ] **Unknown Google account denied**: from a browser signed into a Google
+      account that was never added under Settings -> Users, click "Sign in
+      with Google" on the login page. Confirm the flow completes with Google
+      but PalPanel denies the sign-in and redirects to `/login?denied=1` --
+      no session is created and no new user row is silently added.
 - [ ] **Crash + auto-restart**: end `PalServer.exe` via Task Manager (kill
       the whole process tree, including the `PalServer-Win64-Shipping-Cmd`
       child). Confirm: a `crash` event appears in the log within a few

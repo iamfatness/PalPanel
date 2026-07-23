@@ -1,29 +1,38 @@
 @inherits LayoutComponentBase
 
-<div class="app-shell">
-    <nav class="sidebar">
-        <div class="brand">PalPanel</div>
-        <NavMenu />
-    </nav>
+<AuthorizeView>
+    <Authorized>
+        <div class="app-shell">
+            <nav class="sidebar">
+                <div class="brand">PalPanel</div>
+                <NavMenu />
+            </nav>
 
-    <div class="main">
-        <main class="content">
-            @Body
-        </main>
+            <div class="main">
+                <main class="content">
+                    @Body
+                </main>
 
-        <footer class="footer">
-            <AuthorizeView>
-                <Authorized>
+                <footer class="footer">
                     <span>@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value)</span>
                     <span class="role">@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value)</span>
-                </Authorized>
-                <NotAuthorized>
-                    <span>Not signed in</span>
-                </NotAuthorized>
-            </AuthorizeView>
-        </footer>
-    </div>
-</div>
+                    <form method="post" action="/auth/logout" class="logout-form">
+                        <AntiforgeryToken />
+                        <button type="submit" class="logout-button">Logout</button>
+                    </form>
+                </footer>
+            </div>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        @* Minimal chrome only: the login/setup pages (their own @@page routes, always
+           AllowAnonymous) render their full content via @@Body below -- they bring their
+           own .login-shell/.login-card layout, so this branch must not wrap @@Body in any
+           sidebar/footer chrome that assumes an authenticated session exists. *@
+        <div class="brand-minimal">PalPanel</div>
+        @Body
+    </NotAuthorized>
+</AuthorizeView>
 
 <div id="blazor-error-ui" data-nosnippet>
     An unhandled error has occurred.

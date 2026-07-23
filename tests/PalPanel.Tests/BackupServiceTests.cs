@@ -90,6 +90,30 @@ public class BackupServiceTests
         Assert.Contains(sink.Events, e => e.Type == "restore");
     }
 
+    [Fact]
+    public async Task CreateBackup_SameSecondCollision_ProducesDistinctFiles()
+    {
+        // Regression pin for a rare flake: two backups requested with the same reason in the
+        // same wall-clock second would otherwise collide on filename (the name is derived from
+        // DateTimeOffset.UtcNow truncated to the second, plus the reason). Force the collision
+        // deterministically -- rather than relying on two real CreateBackupAsync calls happening
+        // to land in the same second -- by pre-creating the exact file CreateBackupAsync is
+        // about to target, then asserting BackupService detects the clash and writes to a
+        // distinct (suffixed) path instead of clobbering the pre-existing file.
+        var (svc, _, bakDir, _) = Make();
+
+        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
+        var collidingPath = Path.Combine(bakDir, $"palworld-{timestamp}-dup.zip");
+        await File.WriteAllTextAsync(collidingPath, "pre-existing");
+
+        var path = await svc.CreateBackupAsync("dup", default);
+
+        Assert.NotEqual(collidingPath, path);
+        Assert.True(File.Exists(collidingPath), "pre-existing colliding file must not be deleted");
+        Assert.True(File.Exists(path), "new backup must land at a distinct path");
+        Assert.Equal("pre-existing", await File.ReadAllTextAsync(collidingPath)); // untouched, not clobbered
+    }
+
     [Theory]
     [InlineData("..\\evil.zip")]
     [InlineData("../evil.zip")]

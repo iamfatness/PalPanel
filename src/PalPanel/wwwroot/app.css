@@ -102,6 +102,31 @@ h1, h3 { margin: 0 0 0.5rem 0; }
         letter-spacing: 0.05em;
     }
 
+    .footer .logout-form {
+        margin-left: auto;
+    }
+
+    .footer .logout-button {
+        background: none;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.25rem 0.75rem;
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+    }
+
+        .footer .logout-button:hover {
+            border-color: var(--accent);
+        }
+
+.brand-minimal {
+    font-size: 1.1rem;
+    font-weight: 600;
+    text-align: center;
+    padding: 1rem 1rem 0;
+}
+
 /* Status card */
 
 .status-card {
