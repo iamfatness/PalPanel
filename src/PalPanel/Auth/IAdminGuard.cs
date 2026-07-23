@@ -33,11 +33,13 @@ public class AdminGuard(IDbContextFactory<PanelDb> factory, IEventSink events, I
     {
         if (actor == SchedulerActor) return;
 
-        // AuthDisabled is the master "no auth" switch: AccessJwtMiddleware short-circuits
-        // every request straight to a synthetic dev@localhost Admin principal WITHOUT ever
-        // creating a matching row in the Users table. If this guard still queried the DB in
-        // that mode, that lookup would always miss and every mutating action would throw
-        // Unauthorized despite auth being "disabled" — fooling the UI's AuthorizeView while
+        // AuthDisabled is the master "no auth" switch: the dev-bypass middleware in
+        // Program.cs short-circuits every request straight to a synthetic dev@localhost
+        // Admin principal (and DOES create/promote a matching Users row via
+        // RoleService.GetOrCreateAsync/SetRoleAsync, so this guard's DB lookup would
+        // actually succeed now) -- but if this guard still queried the DB unconditionally,
+        // any other AuthDisabled=true scenario without that row present would throw
+        // Unauthorized despite auth being "disabled", fooling the UI's AuthorizeView while
         // the server-side guard silently rejected everything. Auth and authz are one system
         // here: disabling auth must disable this backstop too.
         if (options.Value.AuthDisabled) return;

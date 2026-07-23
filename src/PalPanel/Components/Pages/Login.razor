@@ -1,0 +1,48 @@
+@page "/login"
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+
+<PageTitle>PalPanel — Sign in</PageTitle>
+
+<div class="login-shell">
+    <div class="login-card">
+        <h1>PalPanel</h1>
+
+        @if (Error == "1")
+        {
+            <div class="alert">Invalid email or password, or account locked.</div>
+        }
+        @if (Denied == "1")
+        {
+            <div class="alert">This account isn't allowed — ask the owner to add you.</div>
+        }
+
+        <form method="post" action="/auth/login">
+            <AntiforgeryToken />
+            <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+            <label>
+                Email
+                <input type="email" name="email" autocomplete="username" required />
+            </label>
+            <label>
+                Password
+                <input type="password" name="password" autocomplete="current-password" required />
+            </label>
+            <button type="submit" class="primary">Sign in</button>
+        </form>
+
+        <div class="login-divider">or</div>
+
+        <a class="button-link" href="/auth/google">Sign in with Google</a>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+
+    [SupplyParameterFromQuery(Name = "denied")]
+    public string? Denied { get; set; }
+
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    public string? ReturnUrl { get; set; }
+}

@@ -1,0 +1,38 @@
+@page "/setup"
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+
+<PageTitle>PalPanel — Setup</PageTitle>
+
+<div class="login-shell">
+    <div class="login-card">
+        <h1>Create the owner account</h1>
+        <p class="login-hint">This is a one-time setup. The first account created here becomes the panel's Admin.</p>
+
+        @if (Error == "1")
+        {
+            <div class="alert">Passwords don't match, or the fields weren't filled in.</div>
+        }
+
+        <form method="post" action="/auth/setup">
+            <AntiforgeryToken />
+            <label>
+                Email
+                <input type="email" name="email" autocomplete="username" required />
+            </label>
+            <label>
+                Password
+                <input type="password" name="password" autocomplete="new-password" required minlength="8" />
+            </label>
+            <label>
+                Confirm password
+                <input type="password" name="confirmPassword" autocomplete="new-password" required minlength="8" />
+            </label>
+            <button type="submit" class="primary">Create owner account</button>
+        </form>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+}

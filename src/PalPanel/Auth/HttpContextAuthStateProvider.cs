@@ -6,9 +6,11 @@ namespace PalPanel.Auth;
 // Blazor Server circuits outlive the HTTP request that started them, so we can't
 // read HttpContext.User lazily inside GetAuthenticationStateAsync (there may be no
 // HttpContext by the time a later render happens). Instead we snapshot the
-// ClaimsPrincipal AccessJwtMiddleware attached to the request once, in this
-// scoped provider's constructor, which runs at circuit start while the
-// originating HttpContext is still available via IHttpContextAccessor.
+// ClaimsPrincipal the request pipeline attached (cookie/Google sign-in, or the
+// AuthDisabled dev bypass) once, in this scoped provider's constructor, which runs
+// at circuit start while the originating HttpContext is still available via
+// IHttpContextAccessor. Either source produces the same claim shape (ClaimTypes.Email
+// + ClaimTypes.Role), which is all this provider ever reads.
 //
 // The provider also subscribes to RoleChangeNotifier so role changes take effect
 // on live circuits immediately: when this circuit's user is Blocked, the state
@@ -40,7 +42,7 @@ public class HttpContextAuthStateProvider : AuthenticationStateProvider, IDispos
               [
                   new Claim(ClaimTypes.Email, _email),
                   new Claim(ClaimTypes.Role, newRole),
-              ], authenticationType: "CfAccess"));
+              ], authenticationType: "RoleChange"));
 
         _state = new AuthenticationState(user);
         NotifyAuthenticationStateChanged(Task.FromResult(_state));

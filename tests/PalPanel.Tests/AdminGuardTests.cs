@@ -29,9 +29,9 @@ public class AdminGuardTests
         { events.Add((type, detail, actorEmail)); return Task.CompletedTask; }
     }
 
-    // AuthDisabled is the master "no auth" switch (see AccessJwtMiddleware, which
-    // short-circuits every request straight to a dev principal without ever touching the
-    // Users table). The guard must honor the same switch: with AuthDisabled=true, an actor
+    // AuthDisabled is the master "no auth" switch (see the dev-bypass middleware in
+    // Program.cs, which short-circuits every request straight to a dev principal). The
+    // guard must honor the same switch: with AuthDisabled=true, an actor
     // with NO row in the database at all must still be allowed through, and no
     // unauthorized-action event should be logged for them.
     [Fact]

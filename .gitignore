@@ -481,3 +481,8 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Local SQLite dev database (never commit)
+palpanel.db
+palpanel.db-shm
+palpanel.db-wal

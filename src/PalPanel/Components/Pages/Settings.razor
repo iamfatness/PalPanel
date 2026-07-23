@@ -12,6 +12,7 @@
 @inject IOptions<PanelOptions> Opts
 @inject AuthenticationStateProvider AuthState
 @inject IAdminGuard Guard
+@inject IUserAdminService UserAdmin
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — Settings</PageTitle>
@@ -27,7 +28,7 @@
             <div class="alert">@_userError</div>
         }
         <table class="data-table">
-            <thead><tr><th>Email</th><th>Role</th><th>First seen</th><th>Last seen</th></tr></thead>
+            <thead><tr><th>Email</th><th>Role</th><th>First seen</th><th>Last seen</th><th>Password</th></tr></thead>
             <tbody>
                 @foreach (var u in _users)
                 {
@@ -43,14 +44,42 @@
                         </td>
                         <td>@u.FirstSeen.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
                         <td>@u.LastSeen.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>
+                            @if (_pwTargetEmail == u.Email)
+                            {
+                                <input type="password" placeholder="New password" @bind="_pwValue" @bind:event="oninput" />
+                                <button @onclick="() => SavePasswordAsync(u)">Save</button>
+                                <button @onclick="CancelPasswordEdit">Cancel</button>
+                            }
+                            else
+                            {
+                                <button @onclick="() => StartPasswordEdit(u)">Set password</button>
+                                @if (u.PasswordHash is not null)
+                                {
+                                    <button @onclick="() => ClearPasswordAsync(u)">Clear password</button>
+                                }
+                            }
+                        </td>
                     </tr>
                 }
                 @if (_users.Count == 0)
                 {
-                    <tr><td colspan="4">No users yet.</td></tr>
+                    <tr><td colspan="5">No users yet.</td></tr>
                 }
             </tbody>
         </table>
+
+        <div class="actions">
+            <input placeholder="Email" @bind="_newUserEmail" @bind:event="oninput" />
+            <select @bind="_newUserRole">
+                @foreach (var r in RoleService.ValidRoles)
+                {
+                    <option value="@r">@r</option>
+                }
+            </select>
+            <input type="password" placeholder="Initial password (optional — blank = Google-only)" @bind="_newUserPassword" @bind:event="oninput" />
+            <button @onclick="CreateUserAsync">Add user</button>
+        </div>
 
         <h2>Schedules</h2>
         @if (_scheduleError is not null)
@@ -128,6 +157,11 @@
     private string _newAction = "restart";
     private bool _apiTestBusy;
     private string? _apiTestResult;
+    private string _newUserEmail = "";
+    private string _newUserRole = "Viewer";
+    private string _newUserPassword = "";
+    private string? _pwTargetEmail;
+    private string _pwValue = "";
 
     protected override async Task OnInitializedAsync()
     {
@@ -156,6 +190,69 @@
         }
         catch (InvalidOperationException ex) { _userError = ex.Message; }
         catch (ArgumentException ex) { _userError = ex.Message; }
+        catch (UnauthorizedAccessException ex) { _userError = ex.Message; }
+    }
+
+    private async Task CreateUserAsync()
+    {
+        _userError = null;
+        if (string.IsNullOrWhiteSpace(_newUserEmail))
+        {
+            _userError = "Email is required.";
+            return;
+        }
+        try
+        {
+            await UserAdmin.CreateUserAsync(
+                _newUserEmail, _newUserRole,
+                string.IsNullOrEmpty(_newUserPassword) ? null : _newUserPassword,
+                _email);
+            _newUserEmail = "";
+            _newUserRole = "Viewer";
+            _newUserPassword = "";
+            await LoadUsersAsync();
+        }
+        catch (InvalidOperationException ex) { _userError = ex.Message; }
+        catch (ArgumentException ex) { _userError = ex.Message; }
+        catch (UnauthorizedAccessException ex) { _userError = ex.Message; }
+    }
+
+    private void StartPasswordEdit(PanelUser u)
+    {
+        _userError = null;
+        _pwTargetEmail = u.Email;
+        _pwValue = "";
+    }
+
+    private void CancelPasswordEdit()
+    {
+        _pwTargetEmail = null;
+        _pwValue = "";
+    }
+
+    private async Task SavePasswordAsync(PanelUser u)
+    {
+        _userError = null;
+        try
+        {
+            await UserAdmin.SetPasswordAsync(u.Email, _pwValue, _email);
+            _pwTargetEmail = null;
+            _pwValue = "";
+            await LoadUsersAsync();
+        }
+        catch (InvalidOperationException ex) { _userError = ex.Message; }
+        catch (UnauthorizedAccessException ex) { _userError = ex.Message; }
+    }
+
+    private async Task ClearPasswordAsync(PanelUser u)
+    {
+        _userError = null;
+        try
+        {
+            await UserAdmin.ClearPasswordAsync(u.Email, _email);
+            await LoadUsersAsync();
+        }
+        catch (InvalidOperationException ex) { _userError = ex.Message; }
         catch (UnauthorizedAccessException ex) { _userError = ex.Message; }
     }
 

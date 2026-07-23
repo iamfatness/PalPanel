@@ -1,15 +1,26 @@
-# PalPanel setup: Palworld REST API, Cloudflare Tunnel, and Access
+# PalPanel setup: Palworld REST API, Cloudflare Tunnel, and Google OAuth
 
 Operator runbook for exposing PalPanel (running on 192.168.1.50 as the
 `PalPanel` Windows service, listening on `http://localhost:5080`) to the
-internet at `https://panel.iamfatness.us`, gated by Cloudflare Access.
+internet at `https://panel.iamfatness.us`.
 
-Security note: `AdminPassword`, `AccessTeamDomain`, and `AccessAud` are
-secrets/environment-specific config. They live **only** in
-`appsettings.Local.json` (gitignored, never committed) or a DPAPI-protected
-store -- never in `appsettings.json` or any file checked into the repo. This
-document uses placeholders (`<...>`) for all secret values; do not paste the
-real `AdminPassword` into any committed doc, issue, or commit message.
+PalPanel gates itself now: it has its own app-native login (password + optional
+Google sign-in, cookie sessions) with a first-run `/setup` flow that creates
+the owner account. **The Cloudflare Access application that used to sit in
+front of the tunnel is gone** -- do not create one (or, if this box still has
+one from before app-native login shipped, delete it: Zero Trust -> Access ->
+Applications -> the `panel.iamfatness.us` application -> Delete). PalPanel's
+own login is the gate now; leaving an Access application in place would just
+add a redundant, unmaintained second login in front of it. The Cloudflare
+Tunnel itself (Parts A/B below) stays -- it's still how the box reaches the
+internet without an inbound port.
+
+Security note: `AdminPassword` and (if using Google sign-in) `GoogleClientId`/
+`GoogleClientSecret` are secrets/environment-specific config. They live
+**only** in `appsettings.Local.json` (gitignored, never committed) or a
+DPAPI-protected store -- never in `appsettings.json` or any file checked into
+the repo. This document uses placeholders (`<...>`) for all secret values; do
+not paste real secrets into any committed doc, issue, or commit message.
 
 ---
 
@@ -83,9 +94,9 @@ poll the server.
    }
    ```
 
-   These four values plus `AccessTeamDomain`/`AccessAud` (Part C) are the
-   only settings that typically need to be filled in per-install;
-   everything else has a sane default in `appsettings.json`.
+   These four values plus, optionally, `GoogleClientId`/`GoogleClientSecret`
+   (Part C) are the only settings that typically need to be filled in
+   per-install; everything else has a sane default in `appsettings.json`.
 
 ---
 
@@ -186,86 +197,81 @@ This exposes the panel without opening any inbound port on the router/UDM.
    files.
 
 7. Verify: from a machine off the LAN (e.g. phone on cellular data), browse
-   to `https://panel.iamfatness.us`. At this point, before Access is
-   configured (Part C), you should reach PalPanel directly -- lock it down
-   next.
+   to `https://panel.iamfatness.us`. You should land on PalPanel's own
+   `/setup` page (first run) or `/login` page -- see "First-run setup" below.
+   PalPanel itself is the only gate now; there is no separate Cloudflare
+   Access login screen in front of it.
+
+   PalPanel runs behind the tunnel over plain HTTP on localhost, so it needs
+   to trust Cloudflare's `X-Forwarded-*` headers to know the original request
+   was HTTPS (for secure cookies, correct redirect URIs, etc.) -- this is
+   already handled by the app itself (`app.UseForwardedHeaders()` in
+   `Program.cs`); there is nothing to configure here.
 
 ---
 
-## Part C -- Cloudflare Access (Zero Trust)
+## Part C -- Create a Google OAuth client (optional)
 
-Gates `panel.iamfatness.us` behind login, without PalPanel needing to run
-its own user/password system for the front door.
+PalPanel's login page always offers password sign-in. Google sign-in is
+**optional** but recommended for friends/family so they don't need to
+remember a password -- it requires a Google OAuth client, set up once per
+install.
 
-1. In the Cloudflare dashboard, go to **Zero Trust** (free plan covers this).
-   On first visit you'll be asked to pick a **team domain**, e.g.
-   `iamfatness` (giving `iamfatness.cloudflareaccess.com`). Record this team
-   domain.
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/) and
+   create a new project (or reuse an existing personal one) -- e.g.
+   "PalPanel".
 
-2. Put the team domain into `appsettings.Local.json` on the install
-   machine, **including the `https://` scheme**:
+2. **APIs & Services -> OAuth consent screen**:
+   - User type: **External** (this is a personal Google account, not a
+     Google Workspace org).
+   - App name: `PalPanel`. Support email: your own.
+   - Scopes: the default `openid`, `email`, `profile` scopes are sufficient
+     -- PalPanel only needs the verified email address.
+   - Test users: while the consent screen is in "Testing" status, add every
+     Google account that should be able to sign in (yourself + friends) as a
+     test user, or click **Publish app** to make it available to any Google
+     account without the test-user list (fine for a small personal app;
+     Google's "unverified app" warning screen still appears either way since
+     this app is never submitted for Google's verification review, but the
+     user can click through it).
 
-   ```json
-   {
-     "Panel": {
-       "AccessTeamDomain": "https://iamfatness.cloudflareaccess.com"
-     }
-   }
-   ```
+3. **Credentials -> Create Credentials -> OAuth client ID**:
+   - Application type: **Web application**.
+   - Name: e.g. "PalPanel web".
+   - Authorized redirect URIs: add exactly
+     `https://panel.iamfatness.us/signin-google`.
+   - Create, then copy the **Client ID** and **Client secret** shown.
 
-   The `https://` scheme is required and must match Cloudflare's issuer
-   exactly, with no trailing slash. PalPanel uses `AccessTeamDomain` both to
-   build the JWKS URL (`<AccessTeamDomain>/cdn-cgi/access/certs`) and as the
-   expected token issuer (`iss`), and Cloudflare sets the `iss` claim to the
-   full `https://...cloudflareaccess.com` URL -- a value without the scheme
-   will fail issuer validation and reject every login.
-
-3. Zero Trust -> **Access -> Applications -> Add an application ->
-   Self-hosted**:
-   - Application domain: `panel.iamfatness.us`
-   - Session duration: **24 hours**
-   - Login methods: enable **Google** and **One-time PIN** (email OTP) --
-     leave other identity providers off so any Google account or any email
-     address can authenticate.
-   - Policy: name it e.g. "Allow anyone authenticated", action **Allow**,
-     include rule **Login Methods -> any** (equivalently, "Everyone" with
-     no additional restriction) -- i.e. any identity that successfully
-     completes login through one of the enabled methods is let through.
-     There's no allowlist to maintain; PalPanel's own role mapping (below)
-     is the second gate.
-   - Save the application. Cloudflare shows the application's **AUD tag**
-     (audience) on the application's overview/settings page -- copy it.
-
-4. Put the AUD tag into `appsettings.Local.json` alongside the team domain
-   (keep the `https://` scheme on `AccessTeamDomain`):
+4. Put both into `appsettings.Local.json` on the install machine:
 
    ```json
    {
      "Panel": {
-       "AccessTeamDomain": "https://iamfatness.cloudflareaccess.com",
-       "AccessAud": "<aud tag from the application settings page>"
+       "GoogleClientId": "<client id>.apps.googleusercontent.com",
+       "GoogleClientSecret": "<client secret>"
      }
    }
    ```
 
-   PalPanel validates the `Cf-Access-Jwt-Assertion` header against this team
-   domain's public keys and checks the audience matches this AUD -- it does
-   not trust the header blindly. Restart the PalPanel service after editing
-   `appsettings.Local.json` for the change to take effect.
+   Restart the PalPanel service after editing `appsettings.Local.json` for
+   the change to take effect. If these are left blank, the "Sign in with
+   Google" link on the login page simply won't work -- password login is
+   unaffected either way.
 
-5. First login / role mapping: browse to `https://panel.iamfatness.us` and
-   sign in (Google or OTP) -- **the very first verified email PalPanel ever
-   sees is automatically promoted to Admin**. Do this yourself first, before
-   sharing the link with anyone else.
+---
 
-6. Verify role mapping with a second identity: have someone else (or use a
-   second Google account / a throwaway email for OTP) sign in. Confirm in
-   PalPanel under **Settings -> Users** that this second account shows up
-   as **Viewer** (read-only dashboard, no mutating controls visible), while
-   your first account shows **Admin**. Promote the second account to Admin
-   from that screen if it should also have control, or leave it as Viewer,
-   or set it to Blocked to revoke access entirely.
+## First-run setup
 
-At this point the panel is reachable at `https://panel.iamfatness.us` from
-anywhere, requires Cloudflare Access login, and enforces Admin/Viewer roles
-inside the app. No inbound ports were opened on the router.
+Browse to `https://panel.iamfatness.us` (or `http://localhost:5080` from the
+box itself). With no users in the database yet, PalPanel redirects you to
+`/setup` to create the **owner** account (email + password) -- this first
+account is always created with the Admin role, no allow-list step needed.
+
+Once the owner account exists, `/setup` refuses to create a second one
+(it redirects straight to `/login` instead); everyone else is added by the
+owner under **Settings -> Users**: email, role (Admin/Viewer/Blocked), and an
+optional initial password. Leave the password blank for a Google-only
+account (they sign in with "Sign in with Google" and must use the same email
+address you added); set an initial password if they'll use password sign-in
+instead (they're required to change it on first login). Blocking a user
+there revokes their access immediately, including any already-open session.
