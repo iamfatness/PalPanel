@@ -1,0 +1,359 @@
+/* PalPanel — dark theme, no framework */
+
+:root {
+    --bg: #14161a;
+    --bg-panel: #1c1f26;
+    --bg-panel-2: #23262f;
+    --border: #2e323c;
+    --text: #e6e8eb;
+    --text-dim: #9aa0aa;
+    --accent: #4f8cff;
+    --ok: #2fbf71;
+    --warn: #e0a52c;
+    --bad: #e0503c;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--accent); }
+
+h1, h3 { margin: 0 0 0.5rem 0; }
+
+/* Layout shell */
+
+.app-shell {
+    display: flex;
+    min-height: 100vh;
+}
+
+.sidebar {
+    width: 220px;
+    flex: none;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    padding: 1rem;
+}
+
+.brand {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+}
+
+.nav-menu {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+    .nav-menu li {
+        margin-bottom: 0.25rem;
+    }
+
+    .nav-menu a {
+        display: block;
+        padding: 0.5rem 0.75rem;
+        border-radius: 6px;
+        color: var(--text-dim);
+        text-decoration: none;
+    }
+
+        .nav-menu a:hover {
+            background: var(--bg-panel-2);
+            color: var(--text);
+        }
+
+        .nav-menu a.active {
+            background: var(--accent);
+            color: #fff;
+        }
+
+.main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.content {
+    flex: 1;
+    padding: 1.5rem;
+}
+
+.footer {
+    border-top: 1px solid var(--border);
+    padding: 0.5rem 1.5rem;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    display: flex;
+    gap: 1rem;
+}
+
+    .footer .role {
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+/* Status card */
+
+.status-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-left: 5px solid var(--text-dim);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+}
+
+    .status-card.ok { border-left-color: var(--ok); }
+    .status-card.warn { border-left-color: var(--warn); }
+    .status-card.bad { border-left-color: var(--bad); }
+
+    .status-card .state {
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+
+    .status-card .alert {
+        color: var(--bad);
+        margin-top: 0.25rem;
+    }
+
+.big-number {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-top: 0.5rem;
+}
+
+    .big-number span {
+        font-size: 1rem;
+        font-weight: 400;
+        color: var(--text-dim);
+        margin-left: 0.35rem;
+    }
+
+/* Actions */
+
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+    align-items: center;
+}
+
+button {
+    background: var(--bg-panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.9rem;
+    cursor: pointer;
+}
+
+    button:hover:not(:disabled) {
+        border-color: var(--accent);
+    }
+
+    button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+    }
+
+input {
+    background: var(--bg-panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    min-width: 220px;
+}
+
+/* Charts */
+
+.charts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+.chart {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    height: 260px;
+}
+
+    .chart canvas {
+        max-height: 200px;
+    }
+
+/* Data tables (Players, History event log) */
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1.25rem;
+}
+
+    .data-table th,
+    .data-table td {
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .data-table th {
+        color: var(--text-dim);
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    .data-table tbody tr:last-child td {
+        border-bottom: none;
+    }
+
+    .data-table tbody tr:hover {
+        background: var(--bg-panel-2);
+    }
+
+select {
+    background: var(--bg-panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+}
+
+/* Stat cards (History uptime/peak) */
+
+.stats-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.stat-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    min-width: 180px;
+}
+
+.stat-label {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin-top: 0.25rem;
+}
+
+.stat-sub {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-top: 0.25rem;
+}
+
+.charts-3 {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 900px) {
+    .charts-3 {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Confirm dialog */
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    max-width: 420px;
+    width: 90%;
+}
+
+    .modal button {
+        margin-top: 0.75rem;
+        margin-right: 0.5rem;
+    }
+
+/* Blazor built-in error UI */
+
+#blazor-error-ui {
+    background: var(--bad);
+    color: #fff;
+    bottom: 0;
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1001;
+}
+
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }
+
+/* Responsive */
+
+@media (max-width: 700px) {
+    .app-shell {
+        flex-direction: column;
+    }
+
+    .sidebar {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .charts {
+        grid-template-columns: 1fr;
+    }
+}

@@ -1,0 +1,32 @@
+@inherits LayoutComponentBase
+
+<div class="app-shell">
+    <nav class="sidebar">
+        <div class="brand">PalPanel</div>
+        <NavMenu />
+    </nav>
+
+    <div class="main">
+        <main class="content">
+            @Body
+        </main>
+
+        <footer class="footer">
+            <AuthorizeView>
+                <Authorized>
+                    <span>@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value)</span>
+                    <span class="role">@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value)</span>
+                </Authorized>
+                <NotAuthorized>
+                    <span>Not signed in</span>
+                </NotAuthorized>
+            </AuthorizeView>
+        </footer>
+    </div>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>

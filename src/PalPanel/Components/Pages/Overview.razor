@@ -1,0 +1,155 @@
+@page "/"
+@using Microsoft.EntityFrameworkCore
+@using PalPanel.Control
+@using PalPanel.Data
+@using PalPanel.Monitoring
+@using PalPanel.Supervisor
+@implements IDisposable
+@inject SnapshotService Snap
+@inject IServerOrchestrator Orch
+@inject AuthenticationStateProvider AuthState
+@inject IDbContextFactory<PanelDb> DbFactory
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Overview</PageTitle>
+
+<div class="status-card @StateCss(_s.State)">
+    <h1>@(_s.Info?.ServerName ?? "Palworld Server")</h1>
+    <div class="state">@StateLabel(_s)</div>
+    @if (_s.State == ServerState.Running && _s.RunningSince is not null)
+    { <div>Up @FormatUptime(DateTimeOffset.UtcNow - _s.RunningSince.Value) — @_s.Info?.Version</div> }
+    @if (_s.State == ServerState.Held)
+    { <div class="alert">Crash loop detected — auto-restart held. Investigate, then press Start.</div> }
+    @if (_s.State == ServerState.Running && !_s.ApiReachable)
+    { <div class="alert">Process alive but REST API unreachable.</div> }
+    <div class="big-number">@_s.Players.Count<span>/@(_s.Metrics?.MaxPlayerNum ?? 32) players</span></div>
+</div>
+
+<AuthorizeView Roles="Admin">
+    <div class="actions">
+        <button disabled="@(!CanStart)" @onclick="() => Do(ct => Orch.StartAsync(_email, ct))">Start</button>
+        <button disabled="@(!CanStop)" @onclick="ConfirmStop">Stop</button>
+        <button disabled="@(!CanStop)" @onclick="ConfirmRestart">Restart</button>
+        <button disabled="@(!CanStop)" @onclick="() => Do(ct => Orch.SaveAsync(_email, ct))">Save world</button>
+        <input @bind="_announceText" placeholder="Announce message..." />
+        <button disabled="@(!CanStop || string.IsNullOrWhiteSpace(_announceText))"
+                @onclick="() => Do(ct => Orch.AnnounceAsync(_email, _announceText, ct))">Announce</button>
+    </div>
+</AuthorizeView>
+
+<div class="charts">
+    <div class="chart"><h3>Players (24 h)</h3><canvas id="playersChart"></canvas></div>
+    <div class="chart"><h3>Memory (24 h)</h3><canvas id="memChart"></canvas></div>
+</div>
+
+<ConfirmDialog @ref="_confirm" />
+
+@code {
+    private ServerSnapshot _s = null!;
+    private string _email = "";
+    private string _announceText = "";
+    private ConfirmDialog _confirm = null!;
+    private bool _busy;
+    private DateTimeOffset _lastChartRefresh = DateTimeOffset.MinValue;
+
+    private bool CanStart => !_busy && _s.State is ServerState.Stopped or ServerState.Held;
+    private bool CanStop => !_busy && _s.State is ServerState.Running or ServerState.Starting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _s = Snap.Current;
+        Snap.Changed += OnSnapshot;
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await RenderChartsAsync();
+    }
+
+    private void OnSnapshot(ServerSnapshot s)
+    {
+        InvokeAsync(async () =>
+        {
+            _s = s;
+            StateHasChanged();
+            if (DateTimeOffset.UtcNow - _lastChartRefresh >= TimeSpan.FromSeconds(60))
+                await RefreshChartsAsync();
+        });
+    }
+
+    private async Task RenderChartsAsync()
+    {
+        var (labels, players, memMb) = await LoadChartDataAsync();
+        await JS.InvokeVoidAsync("palCharts.renderLineChart", "playersChart", labels, players, "players");
+        await JS.InvokeVoidAsync("palCharts.renderLineChart", "memChart", labels, memMb, "MB");
+        _lastChartRefresh = DateTimeOffset.UtcNow;
+    }
+
+    private async Task RefreshChartsAsync()
+    {
+        var (labels, players, memMb) = await LoadChartDataAsync();
+        await JS.InvokeVoidAsync("palCharts.updateLineChart", "playersChart", labels, players);
+        await JS.InvokeVoidAsync("palCharts.updateLineChart", "memChart", labels, memMb);
+        _lastChartRefresh = DateTimeOffset.UtcNow;
+    }
+
+    private async Task<(string[] Labels, double[] Players, double[] MemMb)> LoadChartDataAsync()
+    {
+        var since = DateTimeOffset.UtcNow.AddHours(-24);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // EF Core's Sqlite provider cannot translate DateTimeOffset filtering OR ordering
+        // server-side (SQLite has no native date type; comparing/sorting the serialized
+        // TEXT representation of a DateTimeOffset doesn't behave correctly, so the
+        // provider refuses rather than silently doing the wrong thing — it throws for
+        // both a `Where(s => s.Ts >= x)` and an `OrderBy(s => s.Ts)`). Raw samples are
+        // capped at ~48h by RetentionService, so loading them all untouched and then
+        // filtering/sorting client-side (the same pattern RetentionService itself uses
+        // for its own Ts comparisons) is cheap.
+        var rows = (await db.Samples.ToListAsync())
+            .Where(s => s.Ts >= since)
+            .OrderBy(s => s.Ts)
+            .ToList();
+
+        // Downsample to at most 288 points (5-min resolution over 24h) so the chart
+        // stays cheap to render even when raw samples are taken every few seconds.
+        const int maxPoints = 288;
+        if (rows.Count > maxPoints)
+        {
+            var bucketSize = (int)Math.Ceiling(rows.Count / (double)maxPoints);
+            rows = rows
+                .Select((r, i) => (r, i))
+                .GroupBy(x => x.i / bucketSize)
+                .Select(g => g.Last().r)
+                .ToList();
+        }
+
+        var labels = rows.Select(r => r.Ts.ToLocalTime().ToString("HH:mm")).ToArray();
+        var players = rows.Select(r => (double)r.Players).ToArray();
+        var memMb = rows.Select(r => r.MemoryBytes / 1_048_576.0).ToArray();
+        return (labels, players, memMb);
+    }
+
+    private async Task Do(Func<CancellationToken, Task> action)
+    { _busy = true; try { await action(CancellationToken.None); } finally { _busy = false; } }
+
+    private async Task ConfirmStop()
+    { if (await _confirm.Show("Stop server?", "Players will be warned, world saved, then shut down."))
+        await Do(ct => Orch.StopAsync(_email, ct)); }
+
+    private async Task ConfirmRestart()
+    { if (await _confirm.Show("Restart server?", "Announce → save → shutdown → backup → relaunch."))
+        await Do(ct => Orch.RestartAsync(_email, [1], ct)); }
+
+    private static string StateCss(ServerState s) => s switch
+    { ServerState.Running => "ok", ServerState.Held or ServerState.Crashed => "bad", _ => "warn" };
+    private static string StateLabel(ServerSnapshot s) =>
+        s.State == ServerState.Running && !s.ApiReachable ? "Running — API unreachable" : s.State.ToString();
+    private static string FormatUptime(TimeSpan t) =>
+        t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h" : $"{t.Hours}h {t.Minutes}m";
+
+    public void Dispose() => Snap.Changed -= OnSnapshot;
+}

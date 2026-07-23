@@ -1,0 +1,198 @@
+@page "/history"
+@using Microsoft.EntityFrameworkCore
+@using PalPanel.Data
+@inject IDbContextFactory<PanelDb> DbFactory
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — History</PageTitle>
+
+<h1>History</h1>
+
+<div class="actions">
+    <label>Range:
+        <select @bind="_range" @bind:after="OnRangeChangedAsync">
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+        </select>
+    </label>
+</div>
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value">@_uptimePct.ToString("0.0")%</div>
+        <div class="stat-sub">@_presentSlots / @_expectedSlots slots with data</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Peak players</div>
+        <div class="stat-value">@_peakPlayers</div>
+    </div>
+</div>
+
+<div class="charts charts-3">
+    <div class="chart"><h3>Players</h3><canvas id="histPlayersChart"></canvas></div>
+    <div class="chart"><h3>FPS</h3><canvas id="histFpsChart"></canvas></div>
+    <div class="chart"><h3>Memory (MB)</h3><canvas id="histMemChart"></canvas></div>
+</div>
+
+<h2>Event log</h2>
+<div class="actions">
+    <label>Type:
+        <select @bind="_typeFilter">
+            <option value="">All</option>
+            @foreach (var t in _eventTypes)
+            {
+                <option value="@t">@t</option>
+            }
+        </select>
+    </label>
+</div>
+<table class="data-table">
+    <thead><tr><th>Time</th><th>Type</th><th>Detail</th><th>Actor</th></tr></thead>
+    <tbody>
+        @foreach (var e in FilteredEvents)
+        {
+            <tr>
+                <td>@e.Ts.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                <td>@e.Type</td>
+                <td>@e.Detail</td>
+                <td>@(e.ActorEmail ?? "—")</td>
+            </tr>
+        }
+        @if (!FilteredEvents.Any())
+        {
+            <tr><td colspan="4">No events.</td></tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private const int MaxChartPoints = 300;
+
+    private string _range = "24h";
+    private double _uptimePct;
+    private int _presentSlots;
+    private int _expectedSlots;
+    private int _peakPlayers;
+    private List<EventLog> _events = [];
+    private List<string> _eventTypes = [];
+    private string _typeFilter = "";
+    private (string[] Labels, double[] Players, double[] Fps, double[] MemMb) _chartData = ([], [], [], []);
+
+    private IEnumerable<EventLog> FilteredEvents =>
+        string.IsNullOrEmpty(_typeFilter) ? _events : _events.Where(e => e.Type == _typeFilter);
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await RenderChartsAsync();
+    }
+
+    private async Task OnRangeChangedAsync()
+    {
+        await LoadAsync();
+        await RenderChartsAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var now = DateTimeOffset.UtcNow;
+
+        switch (_range)
+        {
+            case "7d":
+                await LoadRollupAsync(db, now, "minute", TimeSpan.FromDays(7), 7 * 24 * 60, "MM/dd HH:mm");
+                break;
+            case "30d":
+                await LoadRollupAsync(db, now, "hour", TimeSpan.FromDays(30), 30 * 24, "MM/dd HH:mm");
+                break;
+            default:
+                await LoadRawAsync(db, now);
+                break;
+        }
+
+        // Event log: last 200 rows, newest first. EF Core's Sqlite provider can't translate
+        // DateTimeOffset OrderBy server-side (same established pattern as Overview.razor /
+        // RetentionService.cs) — load then sort/take client-side. The type filter dropdown is
+        // populated from the distinct types actually present in those 200 loaded rows, so
+        // filtering is a pure client-side re-render with no extra DB round trip.
+        var allEvents = await db.Events.ToListAsync();
+        _events = allEvents.OrderByDescending(e => e.Ts).Take(200).ToList();
+        _eventTypes = _events.Select(e => e.Type).Distinct().OrderBy(t => t).ToList();
+        if (!string.IsNullOrEmpty(_typeFilter) && !_eventTypes.Contains(_typeFilter))
+            _typeFilter = "";
+    }
+
+    private async Task LoadRawAsync(PanelDb db, DateTimeOffset now)
+    {
+        var since = now.AddHours(-24);
+        // Raw Samples are only ever written by PollerService while the server is Running AND
+        // the REST API is reachable — so a gap here (uptime % below 100) reflects genuine
+        // downtime/unreachability, not missing instrumentation.
+        var rows = (await db.Samples.ToListAsync())
+            .Where(s => s.Ts >= since)
+            .OrderBy(s => s.Ts)
+            .ToList();
+
+        _expectedSlots = 24 * 60; // one expected slot per minute
+        _presentSlots = rows.Select(s => TruncateToMinute(s.Ts)).Distinct().Count();
+        _uptimePct = ComputePct(_presentSlots, _expectedSlots);
+        _peakPlayers = rows.Count == 0 ? 0 : rows.Max(s => s.Players);
+
+        var points = Downsample(rows.Select(s => (s.Ts, (double)s.Players, s.Fps, s.MemoryBytes / 1_048_576.0)).ToList());
+        _chartData = ToChartData(points, "HH:mm");
+    }
+
+    private async Task LoadRollupAsync(PanelDb db, DateTimeOffset now, string granularity, TimeSpan window,
+        int expectedSlots, string labelFormat)
+    {
+        var since = now - window;
+        var rows = (await db.SampleRollups.ToListAsync())
+            .Where(r => r.Granularity == granularity && r.Ts >= since)
+            .OrderBy(r => r.Ts)
+            .ToList();
+
+        _expectedSlots = expectedSlots;
+        _presentSlots = rows.Count; // each rollup row is already exactly one distinct bucket
+        _uptimePct = ComputePct(_presentSlots, _expectedSlots);
+        _peakPlayers = rows.Count == 0 ? 0 : rows.Max(r => r.MaxPlayers);
+
+        var points = Downsample(rows.Select(r => (r.Ts, r.AvgPlayers, r.AvgFps, r.AvgMemoryBytes / 1_048_576.0)).ToList());
+        _chartData = ToChartData(points, labelFormat);
+    }
+
+    private static double ComputePct(int present, int expected) =>
+        expected == 0 ? 0 : Math.Min(100.0, 100.0 * present / expected);
+
+    private static (string[] Labels, double[] Players, double[] Fps, double[] MemMb) ToChartData(
+        List<(DateTimeOffset Ts, double Players, double Fps, double MemMb)> points, string labelFormat) => (
+        points.Select(p => p.Ts.ToLocalTime().ToString(labelFormat)).ToArray(),
+        points.Select(p => p.Players).ToArray(),
+        points.Select(p => p.Fps).ToArray(),
+        points.Select(p => p.MemMb).ToArray());
+
+    // Downsample to at most MaxChartPoints so a chart stays cheap to render regardless of the
+    // selected range's underlying row count (mirrors Overview.razor's chart downsampling).
+    private static List<(DateTimeOffset Ts, double Players, double Fps, double MemMb)> Downsample(
+        List<(DateTimeOffset Ts, double Players, double Fps, double MemMb)> rows)
+    {
+        if (rows.Count <= MaxChartPoints) return rows;
+        var bucketSize = (int)Math.Ceiling(rows.Count / (double)MaxChartPoints);
+        return rows.Select((r, i) => (r, i)).GroupBy(x => x.i / bucketSize).Select(g => g.Last().r).ToList();
+    }
+
+    private static DateTimeOffset TruncateToMinute(DateTimeOffset t) =>
+        new(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, t.Offset);
+
+    private async Task RenderChartsAsync()
+    {
+        await JS.InvokeVoidAsync("palCharts.renderLineChart", "histPlayersChart", _chartData.Labels, _chartData.Players, "players");
+        await JS.InvokeVoidAsync("palCharts.renderLineChart", "histFpsChart", _chartData.Labels, _chartData.Fps, "fps");
+        await JS.InvokeVoidAsync("palCharts.renderLineChart", "histMemChart", _chartData.Labels, _chartData.MemMb, "MB");
+    }
+}

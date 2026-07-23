@@ -1,0 +1,239 @@
+@page "/settings"
+@using Cronos
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Options
+@using PalPanel.Auth
+@using PalPanel.Data
+@using PalPanel.PalApi
+@inject RoleService Roles
+@inject IDbContextFactory<PanelDb> DbFactory
+@inject IEventSink Events
+@inject IPalApi Api
+@inject IOptions<PanelOptions> Opts
+@inject AuthenticationStateProvider AuthState
+@inject IAdminGuard Guard
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Settings</PageTitle>
+
+<AuthorizeView Roles="Admin">
+    <Authorized>
+
+        <h1>Settings</h1>
+
+        <h2>Users</h2>
+        @if (_userError is not null)
+        {
+            <div class="alert">@_userError</div>
+        }
+        <table class="data-table">
+            <thead><tr><th>Email</th><th>Role</th><th>First seen</th><th>Last seen</th></tr></thead>
+            <tbody>
+                @foreach (var u in _users)
+                {
+                    <tr>
+                        <td>@u.Email</td>
+                        <td>
+                            <select value="@u.Role" @onchange="e => ChangeRoleAsync(u, e)">
+                                @foreach (var r in RoleService.ValidRoles)
+                                {
+                                    <option value="@r">@r</option>
+                                }
+                            </select>
+                        </td>
+                        <td>@u.FirstSeen.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>@u.LastSeen.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    </tr>
+                }
+                @if (_users.Count == 0)
+                {
+                    <tr><td colspan="4">No users yet.</td></tr>
+                }
+            </tbody>
+        </table>
+
+        <h2>Schedules</h2>
+        @if (_scheduleError is not null)
+        {
+            <div class="alert">@_scheduleError</div>
+        }
+        <table class="data-table">
+            <thead><tr><th>Cron</th><th>Action</th><th>Enabled</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var s in _schedules)
+                {
+                    <tr>
+                        <td>@s.Cron</td>
+                        <td>@s.Action</td>
+                        <td><input type="checkbox" checked="@s.Enabled" @onchange="() => ToggleEnabledAsync(s)" /></td>
+                        <td><button @onclick="() => DeleteScheduleAsync(s)">Delete</button></td>
+                    </tr>
+                }
+                @if (_schedules.Count == 0)
+                {
+                    <tr><td colspan="4">No schedules configured.</td></tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="actions">
+            <input placeholder="Cron expression, e.g. 0 4 * * *" @bind="_newCron" />
+            <select @bind="_newAction">
+                <option value="restart">restart</option>
+                <option value="backup">backup</option>
+            </select>
+            <button @onclick="AddScheduleAsync">Add schedule</button>
+        </div>
+
+        <h2>Diagnostics</h2>
+
+        <table class="data-table">
+            <tbody>
+                <tr><td>Server executable</td><td>@Opts.Value.ServerExePath</td></tr>
+                <tr><td>Save directory</td><td>@Opts.Value.SaveDirectory</td></tr>
+                <tr><td>Backup directory</td><td>@Opts.Value.BackupDirectory</td></tr>
+                <tr><td>Backups to keep</td><td>@Opts.Value.BackupsToKeep</td></tr>
+                <tr><td>REST API base URL</td><td>@Opts.Value.ApiBaseUrl</td></tr>
+                <tr><td>Database</td><td>@Opts.Value.DbPath</td></tr>
+            </tbody>
+        </table>
+
+        <div class="actions">
+            <button disabled="@_apiTestBusy" @onclick="TestApiAsync">Test REST API</button>
+        </div>
+        @if (_apiTestResult is not null)
+        {
+            <p class="stat-sub">@_apiTestResult</p>
+        }
+
+        <p class="stat-sub">
+            The REST API must be enabled in PalWorldSettings.ini with these keys set:
+            <code>RESTAPIEnabled=True</code>, <code>RESTAPIPort=8212</code>, and <code>AdminPassword</code> set to a
+            non-empty value matching <code>Panel:AdminPassword</code>.
+        </p>
+
+    </Authorized>
+    <NotAuthorized>
+        <p>Admin access required.</p>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private IReadOnlyList<PanelUser> _users = [];
+    private List<Schedule> _schedules = [];
+    private string _email = "";
+    private string? _userError;
+    private string? _scheduleError;
+    private string _newCron = "";
+    private string _newAction = "restart";
+    private bool _apiTestBusy;
+    private string? _apiTestResult;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        await LoadUsersAsync();
+        await LoadSchedulesAsync();
+    }
+
+    private async Task LoadUsersAsync() => _users = await Roles.ListAsync();
+
+    private async Task LoadSchedulesAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _schedules = await db.Schedules.OrderBy(s => s.Id).ToListAsync();
+    }
+
+    private async Task ChangeRoleAsync(PanelUser u, ChangeEventArgs e)
+    {
+        var newRole = e.Value?.ToString() ?? u.Role;
+        _userError = null;
+        try
+        {
+            await Roles.SetRoleAsync(u.Email, newRole, _email);
+            await LoadUsersAsync();
+        }
+        catch (InvalidOperationException ex) { _userError = ex.Message; }
+        catch (ArgumentException ex) { _userError = ex.Message; }
+        catch (UnauthorizedAccessException ex) { _userError = ex.Message; }
+    }
+
+    private async Task AddScheduleAsync()
+    {
+        _scheduleError = null;
+        if (string.IsNullOrWhiteSpace(_newCron))
+        {
+            _scheduleError = "Cron expression is required.";
+            return;
+        }
+        try { CronExpression.Parse(_newCron); }
+        catch (Exception ex)
+        {
+            _scheduleError = $"Invalid cron expression '{_newCron}': {ex.Message}";
+            return;
+        }
+
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var s = new Schedule { Cron = _newCron, Action = _newAction, Enabled = true };
+            db.Schedules.Add(s);
+            await db.SaveChangesAsync();
+            await Events.LogAsync("schedule-change", $"Added schedule {s.Cron} -> {s.Action}", _email);
+            _newCron = "";
+            await LoadSchedulesAsync();
+        }
+        catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }
+    }
+
+    private async Task ToggleEnabledAsync(Schedule s)
+    {
+        _scheduleError = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var row = await db.Schedules.FindAsync(s.Id);
+            if (row is null) return;
+            row.Enabled = !row.Enabled;
+            await db.SaveChangesAsync();
+            await Events.LogAsync("schedule-change", $"Schedule {row.Id} ({row.Cron}/{row.Action}) enabled={row.Enabled}", _email);
+            await LoadSchedulesAsync();
+        }
+        catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }
+    }
+
+    private async Task DeleteScheduleAsync(Schedule s)
+    {
+        _scheduleError = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var row = await db.Schedules.FindAsync(s.Id);
+            if (row is null) return;
+            db.Schedules.Remove(row);
+            await db.SaveChangesAsync();
+            await Events.LogAsync("schedule-change", $"Deleted schedule {row.Id} ({row.Cron}/{row.Action})", _email);
+            await LoadSchedulesAsync();
+        }
+        catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }
+    }
+
+    private async Task TestApiAsync()
+    {
+        _apiTestBusy = true;
+        _apiTestResult = null;
+        try
+        {
+            var info = await Api.GetInfoAsync(CancellationToken.None);
+            _apiTestResult = info is null
+                ? "No response from REST API."
+                : $"OK — version {info.Version}, server \"{info.ServerName}\"";
+        }
+        catch (Exception ex) { _apiTestResult = $"Failed: {ex.Message}"; }
+        finally { _apiTestBusy = false; }
+    }
+}
