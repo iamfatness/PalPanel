@@ -36,7 +36,7 @@
         <button disabled="@(!CanStop)" @onclick="ConfirmStop">Stop</button>
         <button disabled="@(!CanStop)" @onclick="ConfirmRestart">Restart</button>
         <button disabled="@(!CanStop)" @onclick="() => Do(ct => Orch.SaveAsync(_email, ct))">Save world</button>
-        <input @bind="_announceText" placeholder="Announce message..." />
+        <input @bind="_announceText" @bind:event="oninput" placeholder="Announce message..." />
         <button disabled="@(!CanStop || string.IsNullOrWhiteSpace(_announceText))"
                 @onclick="() => Do(ct => Orch.AnnounceAsync(_email, _announceText, ct))">Announce</button>
     </div>

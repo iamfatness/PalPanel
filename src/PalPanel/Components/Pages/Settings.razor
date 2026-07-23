@@ -77,7 +77,7 @@
         </table>
 
         <div class="actions">
-            <input placeholder="Cron expression, e.g. 0 4 * * *" @bind="_newCron" />
+            <input placeholder="Cron expression, e.g. 0 4 * * *" @bind="_newCron" @bind:event="oninput" />
             <select @bind="_newAction">
                 <option value="restart">restart</option>
                 <option value="backup">backup</option>
