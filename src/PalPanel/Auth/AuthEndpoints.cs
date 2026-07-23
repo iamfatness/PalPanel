@@ -69,6 +69,7 @@ public static class AuthEndpoints
     {
         var result = await ctx.AuthenticateAsync("External");
         var email = result.Succeeded ? result.Principal?.FindFirst(ClaimTypes.Email)?.Value : null;
+        var emailVerified = result.Succeeded ? result.Principal?.FindFirst("urn:google:email_verified")?.Value : null;
 
         if (string.IsNullOrWhiteSpace(email))
         {
@@ -80,10 +81,34 @@ public static class AuthEndpoints
             return Results.Redirect("/login?denied=1");
         }
 
-        var outcome = await CompleteGoogleSignInAsync(ctx, email, factory, events);
+        var outcome = await CompleteVerifiedGoogleSignInAsync(ctx, email, emailVerified, factory, events);
         if (outcome is Microsoft.AspNetCore.Http.HttpResults.RedirectHttpResult { Url: "/" } && !string.IsNullOrEmpty(returnUrl))
             return Results.Redirect(SafeReturnUrl(returnUrl));
         return outcome;
+    }
+
+    // The verified-email GATE, in front of the allow-list decision. Pulled into its own PUBLIC
+    // method (rather than inlined in GoogleCompleteAsync) so it's directly unit testable with a
+    // synthetic email + email_verified value -- constructing a real "External" ticket to drive
+    // GoogleCompleteAsync end to end is not worth faking, but the security-critical "don't trust
+    // an unverified email" branch absolutely must be covered (see GoogleAuthTests). Google's
+    // `email_verified` claim (mapped in Program.cs) arrives as the string "true"/"false"; anything
+    // that isn't exactly "true" (case-insensitive) -- false, missing, empty, garbage -- is
+    // treated as unverified and denied WITHOUT ever reaching the Users lookup, so an attacker who
+    // could somehow get Google to return an allow-listed address they don't own (unverified) still
+    // gets no app session. CompleteGoogleSignInAsync's own signature/semantics stay unchanged.
+    public static async Task<IResult> CompleteVerifiedGoogleSignInAsync(
+        HttpContext ctx, string email, string? emailVerified, IDbContextFactory<PanelDb> factory, IEventSink events)
+    {
+        if (!string.Equals(emailVerified, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            await ctx.SignOutAsync("External");
+            var normalizedEmail = Normalize(email);
+            await events.LogAsync("login-denied-unverified", $"email={normalizedEmail}", normalizedEmail);
+            return Results.Redirect("/login?denied=1");
+        }
+
+        return await CompleteGoogleSignInAsync(ctx, email, factory, events);
     }
 
     // The allow-list decision, pulled out into its own PUBLIC method so it's directly unit

@@ -111,6 +111,14 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         o.CallbackPath = "/signin-google"; // must match the Google OAuth client's redirect URI
         o.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
         o.CorrelationCookie.SameSite = SameSiteMode.None;
+        // Defense in depth on the identity claim: capture Google's `email_verified` flag as a
+        // claim so the completion wiring can REFUSE to trust an unverified email. Without this,
+        // a userinfo response that returned an allow-listed address the caller doesn't actually
+        // own (unverified) would be trusted for the Users lookup -> a session as someone else.
+        // Google's OIDC userinfo uses the `email_verified` boolean key; MapJsonKey stores it as
+        // the string "true"/"false" under this claim type. The verified gate lives in
+        // AuthEndpoints.CompleteVerifiedGoogleSignInAsync (which reads this claim).
+        o.ClaimActions.MapJsonKey("urn:google:email_verified", "email_verified", "boolean");
         // See the "External" AddCookie registration above: without this, RemoteAuthenticationHandler
         // would sign the verified Google ticket straight into the DEFAULT scheme (our app's own
         // "Cookies" scheme, since no SignInScheme was set and AddAuthentication's default scheme

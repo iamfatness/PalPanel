@@ -167,6 +167,60 @@ public class GoogleAuthTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CompleteVerifiedGoogleSignInAsync_UnverifiedEmail_Denied_NoCookie_EvenIfAllowListed()
+    {
+        // The email IS on the allow-list (seeded Viewer) -- proving the gate refuses BEFORE the
+        // Users lookup purely because Google reported the address as unverified. This is the
+        // defense-in-depth case: an attacker who got Google to return an allow-listed address they
+        // don't actually own (email_verified=false) must still get no app session.
+        await SeedUserAsync("viewer@example.com", "Viewer", DateTimeOffset.UtcNow);
+
+        using var scope0 = _factory.Services.CreateScope();
+        var dbFactory = scope0.ServiceProvider.GetRequiredService<IDbContextFactory<PanelDb>>();
+        var events = scope0.ServiceProvider.GetRequiredService<IEventSink>();
+
+        var (ctx, scope) = NewHttpContext();
+        var result = await AuthEndpoints.CompleteVerifiedGoogleSignInAsync(
+            ctx, "viewer@example.com", "false", dbFactory, events);
+        var (status, location) = await ExecuteAsync(result, ctx);
+        scope.Dispose();
+        Assert.Equal(StatusCodes.Status302Found, status);
+        Assert.Equal("/login?denied=1", location);
+        Assert.False(HasAuthCookie(ctx), "An unverified email must never receive an app cookie, even if allow-listed.");
+
+        var deniedEvents = await GetEventsAsync("login-denied-unverified");
+        Assert.Contains(deniedEvents, e => e.Detail.Contains("viewer@example.com"));
+
+        // And it must NOT have fallen through to a success sign-in for the allow-listed user.
+        var successEvents = await GetEventsAsync("login-success");
+        Assert.DoesNotContain(successEvents, e => e.ActorEmail == "viewer@example.com");
+    }
+
+    [Fact]
+    public async Task CompleteVerifiedGoogleSignInAsync_VerifiedAllowListed_SignsIn()
+    {
+        // The pass-through case: email_verified="true" (as Google's boolean claim serializes) for
+        // an allow-listed Viewer flows straight to the normal success path (app cookie + login-success).
+        await SeedUserAsync("viewer@example.com", "Viewer", DateTimeOffset.UtcNow.AddDays(-1));
+
+        using var scope0 = _factory.Services.CreateScope();
+        var dbFactory = scope0.ServiceProvider.GetRequiredService<IDbContextFactory<PanelDb>>();
+        var events = scope0.ServiceProvider.GetRequiredService<IEventSink>();
+
+        var (ctx, scope) = NewHttpContext();
+        var result = await AuthEndpoints.CompleteVerifiedGoogleSignInAsync(
+            ctx, "viewer@example.com", "true", dbFactory, events);
+        var (status, location) = await ExecuteAsync(result, ctx);
+        scope.Dispose();
+        Assert.Equal(StatusCodes.Status302Found, status);
+        Assert.Equal("/", location);
+        Assert.True(HasAuthCookie(ctx), "A verified, allow-listed user must receive an app cookie.");
+
+        var successEvents = await GetEventsAsync("login-success");
+        Assert.Contains(successEvents, e => e.ActorEmail == "viewer@example.com" && e.Detail.Contains("method=google"));
+    }
+
+    [Fact]
     public async Task GoogleChallenge_WithClientIdConfigured_RedirectsToGoogle()
     {
         await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
