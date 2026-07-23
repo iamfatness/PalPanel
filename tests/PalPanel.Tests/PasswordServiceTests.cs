@@ -44,4 +44,10 @@ public class PasswordServiceTests
 
     [Fact] public void CheckPassword_NoPasswordHash_ReturnsNoPassword()
     { var u = new PanelUser { Email="a@b.c", PasswordHash=null }; Assert.Equal(LoginOutcome.NoPassword, _svc.CheckPassword(u, "pw", T0).Outcome); }
+
+    // VerifyDummy always returns false (there is no real account behind it) and must not throw
+    // for any input -- it exists purely to spend one PBKDF2 round for timing parity on the
+    // unknown-email login path.
+    [Fact] public void VerifyDummy_AlwaysFalse_NeverThrows()
+    { Assert.False(_svc.VerifyDummy("anything")); Assert.False(_svc.VerifyDummy("")); }
 }

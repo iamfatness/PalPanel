@@ -255,7 +255,14 @@ public class AuthEndpointsTests : IAsyncLifetime
         var beforeLogout = await client.GetAsync("/");
         Assert.Equal(HttpStatusCode.OK, beforeLogout.StatusCode);
 
-        var logout = await client.PostAsync("/auth/logout", new FormUrlEncodedContent([]));
+        // Logout is now antiforgery-protected (a form-bound endpoint), so the token+cookie must
+        // be supplied exactly like login/setup. Crucially, the token must be fetched AFTER
+        // sign-in: ASP.NET's antiforgery token embeds the authenticated user's identity, so the
+        // `loginToken` minted earlier while anonymous is no longer valid now that we hold an auth
+        // cookie -- a fresh GET (of any page that renders <AntiforgeryToken />) issues one bound
+        // to the current user.
+        var logoutToken = await GetAntiforgeryTokenAsync(client, "/login");
+        var logout = await client.PostAsync("/auth/logout", Form(logoutToken));
         Assert.Equal(HttpStatusCode.Redirect, logout.StatusCode);
         Assert.Equal("/login", logout.Headers.Location!.ToString());
 
@@ -280,5 +287,82 @@ public class AuthEndpointsTests : IAsyncLifetime
         ]));
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Logout_NoAntiforgeryToken_Rejected()
+    {
+        // Proves the logout CSRF hole is closed: the dummy [FromForm] param means /auth/logout
+        // now carries the same automatic antiforgery requirement as login/setup, so a tokenless
+        // (i.e. cross-site) POST is rejected rather than silently signing the victim out. A fresh
+        // client with no antiforgery cookie/token at all is exactly the shape of a CSRF attempt.
+        await SeedOwnerAsync("owner@example.com", "Sup3rSecret!");
+
+        var client = NoRedirectClient();
+        var resp = await client.PostAsync("/auth/logout", new FormUrlEncodedContent([]));
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Setup_NoAntiforgeryToken_Rejected()
+    {
+        // Parity with Login_NoAntiforgeryToken_Rejected: an empty-DB fresh install, POST
+        // /auth/setup with no antiforgery cookie/token, must be rejected before any owner is
+        // created -- proving the [FromForm] binding enforces antiforgery on setup too.
+        var client = NoRedirectClient();
+        var resp = await client.PostAsync("/auth/setup", new FormUrlEncodedContent(
+        [
+            new KeyValuePair<string, string>("email", "owner@example.com"),
+            new KeyValuePair<string, string>("password", "Sup3rSecret!"),
+            new KeyValuePair<string, string>("confirmPassword", "Sup3rSecret!"),
+        ]));
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<PanelDb>>();
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Equal(0, await db.Users.CountAsync());
+    }
+
+    [Fact]
+    public async Task Setup_PasswordTooShort_Rejected_NoOwnerCreated()
+    {
+        var client = NoRedirectClient();
+        var token = await GetAntiforgeryTokenAsync(client, "/setup");
+        var resp = await client.PostAsync("/auth/setup",
+            Form(token, ("email", "owner@example.com"), ("password", "short7!"), ("confirmPassword", "short7!"))); // 7 chars
+
+        Assert.Equal(HttpStatusCode.Redirect, resp.StatusCode);
+        Assert.Contains("/setup", resp.Headers.Location!.ToString());
+
+        using var scope = _factory.Services.CreateScope();
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<PanelDb>>();
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Equal(0, await db.Users.CountAsync());
+    }
+
+    // Open-redirect hardening: a successful login with a hostile returnUrl must never redirect
+    // off-panel. Each malicious form is one of the classic open-redirect payloads; all must
+    // land on the local "/" root, while a genuine local path is honored verbatim.
+    [Theory]
+    [InlineData("https://evil.example", "/")]
+    [InlineData("//evil.example", "/")]
+    [InlineData("/\\evil.example", "/")]        // "/\evil.example" -- backslash after the slash
+    [InlineData("/\t/evil.example", "/")]        // embedded control char (tab) the browser would normalize
+    [InlineData("/history", "/history")]         // legit local path -- honored
+    [InlineData("", "/")]                         // empty -> root
+    public async Task Login_ReturnUrl_OnlyHonorsLocalPaths(string returnUrl, string expectedLocation)
+    {
+        await SeedOwnerAsync("owner@example.com", "Sup3rSecret!");
+
+        var client = NoRedirectClient();
+        var token = await GetAntiforgeryTokenAsync(client, "/login");
+        var resp = await client.PostAsync("/auth/login",
+            Form(token, ("email", "owner@example.com"), ("password", "Sup3rSecret!"), ("returnUrl", returnUrl)));
+
+        Assert.Equal(HttpStatusCode.Redirect, resp.StatusCode);
+        Assert.Equal(expectedLocation, resp.Headers.Location!.ToString());
     }
 }

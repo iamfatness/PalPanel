@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
@@ -22,21 +23,15 @@ namespace PalPanel.Auth;
 // (that's the whole point of a login/setup flow), so each is explicitly opted out.
 public static class AuthEndpoints
 {
-    // Timing-attack mitigation: an unknown-email login attempt still runs a full password
-    // verification against a fixed dummy hash, so the response takes comparable time/shape to
-    // a real user lookup and can't be used to enumerate which emails have accounts.
-    private const string DummyPasswordSeed = "dummy-nonexistent-user-Xx9!";
+    // Server-side minimum password length for setup. The Razor form also sets minlength=8, but
+    // that's a client-side convenience only (trivially bypassed by POSTing directly), so the
+    // real enforcement lives here.
+    private const int MinPasswordLength = 8;
 
     public static void MapAuthEndpoints(this WebApplication app)
     {
         app.MapPost("/auth/login", LoginAsync).AllowAnonymous();
-        // Cast to `Delegate` explicitly: LogoutAsync's signature (a single HttpContext
-        // parameter, returning something Task-assignable) is an EXACT match for the
-        // `RequestDelegate` delegate type, so plain method-group conversion resolves MapPost's
-        // `(string, RequestDelegate)` overload instead of the minimal-API `(string, Delegate)`
-        // one -- which silently discards the returned IResult instead of writing it to the
-        // response (ASP0016). The cast forces the correct overload.
-        app.MapPost("/auth/logout", (Delegate)LogoutAsync).AllowAnonymous();
+        app.MapPost("/auth/logout", LogoutAsync).AllowAnonymous();
         app.MapPost("/auth/setup", SetupAsync).AllowAnonymous();
     }
 
@@ -57,10 +52,11 @@ public static class AuthEndpoints
 
         if (user is null)
         {
-            // Dummy verify only, for timing parity -- never signs anyone in, regardless of
-            // outcome, since there is no real user behind this email at all.
-            var dummy = new PanelUser { Email = normalizedEmail, PasswordHash = passwords.Hash(DummyPasswordSeed) };
-            _ = passwords.CheckPassword(dummy, password, now);
+            // Constant-cost dummy verify (exactly one PBKDF2 round against a PRECOMPUTED hash --
+            // NOT a fresh per-request Hash(), which would be two rounds and make unknown emails
+            // measurably slower than a real wrong-password attempt, i.e. an enumeration signal in
+            // the opposite direction plus free CPU amplification). Never signs anyone in.
+            passwords.VerifyDummy(password);
             await events.LogAsync("login-failed", $"email={normalizedEmail} outcome=unknown-user");
             return Results.Redirect("/login?error=1");
         }
@@ -90,8 +86,26 @@ public static class AuthEndpoints
         return Results.Redirect("/login?error=1");
     }
 
-    private static async Task<IResult> LogoutAsync(HttpContext ctx)
+    // Antiforgery on logout is validated EXPLICITLY here rather than via the [FromForm]
+    // auto-requirement used by login/setup. Reason: logout has no real form field to bind, and a
+    // *dummy optional* `[FromForm] string?` param does NOT attach the middleware's
+    // "requires-validation" antiforgery metadata (only a required form binding does) -- so the
+    // middleware skips it and the generated form-read then throws an *unchecked-antiforgery*
+    // InvalidOperationException (HTTP 500) on a tokenless POST instead of a clean 400. Calling
+    // ValidateRequestAsync ourselves rejects the CSRF forced-logout with a proper 400 and no
+    // dependence on binding-shape magic. The logout form/button (added with the logged-out UX in
+    // a later task) must render <AntiforgeryToken /> so a legitimate logout carries the token.
+    private static async Task<IResult> LogoutAsync(HttpContext ctx, IAntiforgery antiforgery)
     {
+        try
+        {
+            await antiforgery.ValidateRequestAsync(ctx);
+        }
+        catch (AntiforgeryValidationException)
+        {
+            return Results.BadRequest();
+        }
+
         await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         return Results.Redirect("/login");
     }
@@ -121,6 +135,11 @@ public static class AuthEndpoints
             return Results.Redirect("/login");
 
         if (string.IsNullOrWhiteSpace(normalizedEmail) || string.IsNullOrEmpty(password))
+            return Results.Redirect("/setup?error=1");
+
+        // Server-side minimum length -- the client `minlength=8` is bypassable by POSTing
+        // directly, so the owner account can't be created with a trivially weak password.
+        if (password.Length < MinPasswordLength)
             return Results.Redirect("/setup?error=1");
 
         if (confirmPassword is not null && confirmPassword != password)
@@ -169,11 +188,21 @@ public static class AuthEndpoints
     private static string Normalize(string? email) => (email ?? "").Trim().ToLowerInvariant();
 
     // Only ever redirect to a local path -- a bare "/foo", never a scheme-qualified or
-    // protocol-relative URL -- so a crafted `returnUrl` (e.g. "https://evil.example" or
-    // "//evil.example") can't turn this into an open redirect off the panel.
-    private static string SafeReturnUrl(string? returnUrl)
+    // protocol-relative URL -- so a crafted `returnUrl` (e.g. "https://evil.example",
+    // "//evil.example", or "/\evil.example") can't turn this into an open redirect off the
+    // panel.
+    internal static string SafeReturnUrl(string? returnUrl)
     {
         if (string.IsNullOrWhiteSpace(returnUrl)) return "/";
+
+        // Reject any ASCII control character (< 0x20) up front, BEFORE the leading-slash checks.
+        // Browsers strip/normalize embedded tab/CR/LF when resolving a URL, so a payload like
+        // "/%09/evil.example" (decoded to "/\t/evil.example") could otherwise sneak past a naive
+        // prefix check and then be normalized by the browser into a protocol-relative-ish
+        // target. Anything with a control char is never a legitimate local path here.
+        foreach (var c in returnUrl)
+            if (c < 0x20) return "/";
+
         if (returnUrl[0] != '/') return "/";
         if (returnUrl.Length > 1 && (returnUrl[1] == '/' || returnUrl[1] == '\\')) return "/";
         return returnUrl;

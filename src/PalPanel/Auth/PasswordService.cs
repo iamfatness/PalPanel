@@ -22,6 +22,16 @@ public class PasswordService : IPasswordService
 
     public string Hash(string password) => _hasher.HashPassword(DummyUser, password);
 
+    // Exactly one Verify against the fixed, precomputed DummyHash -- no per-call HashPassword,
+    // so this costs the same single PBKDF2 round as a real user's wrong-password Verify. Always
+    // returns false (there is no real account behind it); the return value exists only so the
+    // caller can treat this uniformly with a real check.
+    public bool VerifyDummy(string password)
+    {
+        _ = Verify(DummyHash, password);
+        return false;
+    }
+
     public bool Verify(string hash, string password)
     {
         if (string.IsNullOrEmpty(hash)) return false;
