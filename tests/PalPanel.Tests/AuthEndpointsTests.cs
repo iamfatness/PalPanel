@@ -104,6 +104,28 @@ public class AuthEndpointsTests : IAsyncLifetime
         Assert.Equal("/", resp.Headers.Location!.ToString());
     }
 
+    // Seeds a user with a valid PasswordHash and Role=Blocked directly via the DB, bypassing
+    // IUserAdminService.CreateUserAsync (which requires an Admin actor already in the DB) -- the
+    // point of this fixture is purely "a blocked account that DOES have the right password",
+    // regardless of how it got into that state (e.g. an Admin later demoted it to Blocked).
+    private async Task SeedBlockedUserAsync(string email, string password)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var passwords = scope.ServiceProvider.GetRequiredService<PalPanel.Auth.IPasswordService>();
+        var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<PanelDb>>();
+        await using var db = await factory.CreateDbContextAsync();
+        var now = DateTimeOffset.UtcNow;
+        db.Users.Add(new PanelUser
+        {
+            Email = email,
+            Role = "Blocked",
+            PasswordHash = passwords.Hash(password),
+            FirstSeen = now,
+            LastSeen = now,
+        });
+        await db.SaveChangesAsync();
+    }
+
     private async Task<PanelUser> GetUserAsync(string email)
     {
         using var scope = _factory.Services.CreateScope();
@@ -207,6 +229,29 @@ public class AuthEndpointsTests : IAsyncLifetime
 
         var events = await GetEventsAsync("login-success");
         Assert.Contains(events, e => e.ActorEmail == "owner@example.com" && e.Detail.Contains("method=password"));
+    }
+
+    // Pins the "block revokes access on BOTH the password and Google paths" guarantee: a Blocked
+    // user who still holds the CORRECT password must be denied on the password path exactly like
+    // CompleteGoogleSignInAsync already denies them on the Google path -- never reaching
+    // SignInUserAsync, never receiving a cookie, and landing on /login?denied=1 (NOT "/").
+    [Fact]
+    public async Task Login_BlockedUser_CorrectPassword_DeniedNoSessionIssued()
+    {
+        await SeedBlockedUserAsync("blocked@example.com", "Sup3rSecret!");
+
+        var client = NoRedirectClient();
+        var token = await GetAntiforgeryTokenAsync(client, "/login");
+
+        var resp = await client.PostAsync("/auth/login",
+            Form(token, ("email", "blocked@example.com"), ("password", "Sup3rSecret!"), ("returnUrl", "")));
+
+        Assert.Equal(HttpStatusCode.Redirect, resp.StatusCode);
+        Assert.Equal("/login?denied=1", resp.Headers.Location!.ToString());
+        Assert.DoesNotContain(resp.Headers, h => h.Key == "Set-Cookie" && h.Value.Any(v => v.Contains("PalPanel.Auth")));
+
+        var events = await GetEventsAsync("login-denied-blocked");
+        Assert.Contains(events, e => e.ActorEmail == "blocked@example.com");
     }
 
     [Fact]

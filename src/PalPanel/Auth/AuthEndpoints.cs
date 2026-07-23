@@ -176,6 +176,16 @@ public static class AuthEndpoints
             return Results.Redirect("/login?error=1");
         }
 
+        // Blocked users must NEVER reach SignInUserAsync, regardless of whether they still hold
+        // the correct password -- this must match CompleteGoogleSignInAsync's own Blocked check
+        // (the shipped "a block revokes access on BOTH the password and Google paths" guarantee).
+        // Checked before CheckPassword so a blocked account's password is never even verified.
+        if (user.Role == "Blocked")
+        {
+            await events.LogAsync("login-denied-blocked", $"email={normalizedEmail}", normalizedEmail);
+            return Results.Redirect("/login?denied=1");
+        }
+
         var check = passwords.CheckPassword(user, password, now);
         if (check.MutatedUser)
             await db.SaveChangesAsync(ctx.RequestAborted);

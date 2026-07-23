@@ -226,19 +226,27 @@ app.UseAntiforgery();
 app.MapAuthEndpoints();
 app.MapGet("/healthz", () => "ok").AllowAnonymous();
 
-// Admin-only backup download. Authorization here is now purely claims-based: the global
-// FallbackPolicy (RequireAuthenticatedUser, registered above) already rejects anonymous
-// requests before this delegate ever runs; this just adds the Admin-only role check on top,
-// reading the Role claim that either real cookie/Google sign-in or the AuthDisabled dev-bypass
-// middleware put on HttpContext.User. The physical path is built ONLY from the matched
-// BackupInfo.FileName (never the raw route-value `file`) — List() only ever enumerates *.zip
-// actually present in BackupDirectory, so this can't be steered off that directory or onto an
-// arbitrary name, unlike Path.Combine(dir, file) with the raw input.
-app.MapGet("/backups/download/{file}", (string file, PalPanel.Control.IBackupService backups,
-    HttpContext ctx, IOptions<PalPanel.PanelOptions> opts) =>
+// Admin-only backup download. The global FallbackPolicy (RequireAuthenticatedUser, registered
+// above) already rejects anonymous requests before this delegate ever runs; on top of that,
+// authorization is DB-authoritative via IAdminGuard.EnsureAdminAsync -- exactly like every other
+// mutating admin action (see IAdminGuard.cs) -- rather than trusting the Role claim baked into
+// the cookie at sign-in, which is never re-read for the cookie's whole 7-day life and would
+// otherwise let a since-demoted-or-blocked admin keep downloading backups. The physical path is
+// built ONLY from the matched BackupInfo.FileName (never the raw route-value `file`) -- List()
+// only ever enumerates *.zip actually present in BackupDirectory, so this can't be steered off
+// that directory or onto an arbitrary name, unlike Path.Combine(dir, file) with the raw input.
+app.MapGet("/backups/download/{file}", async (string file, PalPanel.Control.IBackupService backups,
+    HttpContext ctx, IOptions<PalPanel.PanelOptions> opts, PalPanel.Auth.IAdminGuard guard) =>
 {
-    if (ctx.User.FindFirst(ClaimTypes.Role)?.Value != "Admin")
+    var email = ctx.User.FindFirst(ClaimTypes.Email)?.Value ?? "";
+    try
+    {
+        await guard.EnsureAdminAsync(email, "backup-download", ctx.RequestAborted);
+    }
+    catch (UnauthorizedAccessException)
+    {
         return Results.StatusCode(StatusCodes.Status403Forbidden);
+    }
     var info = backups.List().FirstOrDefault(b => b.FileName == file);
     if (info is null) return Results.NotFound();
     var path = Path.Combine(opts.Value.BackupDirectory, info.FileName);
