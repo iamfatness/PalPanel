@@ -28,6 +28,10 @@
 
 <AuthorizeView Roles="Admin">
     <div class="actions">
+        @if (_error is not null)
+        {
+            <div class="alert">@_error</div>
+        }
         <button disabled="@(!CanStart)" @onclick="() => Do(ct => Orch.StartAsync(_email, ct))">Start</button>
         <button disabled="@(!CanStop)" @onclick="ConfirmStop">Stop</button>
         <button disabled="@(!CanStop)" @onclick="ConfirmRestart">Restart</button>
@@ -51,6 +55,7 @@
     private string _announceText = "";
     private ConfirmDialog _confirm = null!;
     private bool _busy;
+    private string? _error;
     private DateTimeOffset _lastChartRefresh = DateTimeOffset.MinValue;
 
     private bool CanStart => !_busy && _s.State is ServerState.Stopped or ServerState.Held;
@@ -134,7 +139,16 @@
     }
 
     private async Task Do(Func<CancellationToken, Task> action)
-    { _busy = true; try { await action(CancellationToken.None); } finally { _busy = false; } }
+    {
+        // Loud-failure rule: an action failure (UnauthorizedAccessException, the game server
+        // being down, the REST API unreachable, ...) must surface inline to the operator, not
+        // propagate as an unhandled exception that kills the Blazor circuit and leaves a dead
+        // button with no visible cause.
+        _busy = true; _error = null;
+        try { await action(CancellationToken.None); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
 
     private async Task ConfirmStop()
     { if (await _confirm.Show("Stop server?", "Players will be warned, world saved, then shut down."))

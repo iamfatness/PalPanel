@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using PalPanel;
 using PalPanel.Auth;
 using PalPanel.Data;
 
@@ -15,7 +17,7 @@ public class RoleServiceTests
         using (var db = dbf.CreateDbContext()) db.Database.EnsureCreated();
         var notifier = new RoleChangeNotifier();
         var events = sp.GetRequiredService<IEventSink>();
-        var guard = new AdminGuard(dbf, events); // real guard end-to-end, not a fake allow-guard
+        var guard = new AdminGuard(dbf, events, Options.Create(new PanelOptions())); // real guard end-to-end, not a fake allow-guard (AuthDisabled=false default)
         return (new RoleService(dbf, events, notifier, guard), dbf, notifier);
     }
 

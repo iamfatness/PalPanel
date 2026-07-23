@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using PalPanel.Data;
 
 namespace PalPanel.Auth;
@@ -21,7 +22,7 @@ public interface IAdminGuard
     Task EnsureAdminAsync(string actor, string action, CancellationToken ct);
 }
 
-public class AdminGuard(IDbContextFactory<PanelDb> factory, IEventSink events) : IAdminGuard
+public class AdminGuard(IDbContextFactory<PanelDb> factory, IEventSink events, IOptions<PanelOptions> options) : IAdminGuard
 {
     // SchedulerService fires scheduled restarts using this synthetic actor — there is no
     // logged-in user behind a cron-triggered restart, so it is always authorized and never
@@ -31,6 +32,15 @@ public class AdminGuard(IDbContextFactory<PanelDb> factory, IEventSink events) :
     public async Task EnsureAdminAsync(string actor, string action, CancellationToken ct)
     {
         if (actor == SchedulerActor) return;
+
+        // AuthDisabled is the master "no auth" switch: AccessJwtMiddleware short-circuits
+        // every request straight to a synthetic dev@localhost Admin principal WITHOUT ever
+        // creating a matching row in the Users table. If this guard still queried the DB in
+        // that mode, that lookup would always miss and every mutating action would throw
+        // Unauthorized despite auth being "disabled" — fooling the UI's AuthorizeView while
+        // the server-side guard silently rejected everything. Auth and authz are one system
+        // here: disabling auth must disable this backstop too.
+        if (options.Value.AuthDisabled) return;
 
         await using var db = await factory.CreateDbContextAsync(ct);
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == actor, ct);

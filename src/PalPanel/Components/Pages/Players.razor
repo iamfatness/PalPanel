@@ -15,6 +15,11 @@
 
 <h1>Players</h1>
 
+@if (_error is not null)
+{
+    <div class="alert">@_error</div>
+}
+
 <table class="data-table">
     <thead>
         <tr>
@@ -89,6 +94,7 @@
     private string _email = "";
     private ConfirmDialog _confirm = null!;
     private bool _busy;
+    private string? _error;
     private List<PlayerSession> _recentSessions = [];
     private List<(string UserId, string Name, TimeSpan Total)> _totalPlaytime = [];
 
@@ -137,7 +143,15 @@
     }
 
     private async Task Do(Func<Task> action)
-    { _busy = true; try { await action(); } finally { _busy = false; } }
+    {
+        // Loud-failure rule (same as Overview.razor): surface kick/ban failures
+        // (UnauthorizedAccessException, API unreachable, ...) inline instead of letting them
+        // propagate as an unhandled exception that kills the Blazor circuit.
+        _busy = true; _error = null;
+        try { await action(); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
 
     private static string FormatDuration(TimeSpan t) =>
         t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h {t.Minutes}m" : $"{(int)t.TotalHours}h {t.Minutes}m";

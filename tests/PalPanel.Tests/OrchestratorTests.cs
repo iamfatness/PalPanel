@@ -129,7 +129,7 @@ public class OrchestratorTests
         var api = new RecordingApi(order, () => launcher.Launched[^1]);
         var backup = new FakeBackup(order);
         var events = new FakeEventSink();
-        var guard = new AdminGuard(dbf, events);
+        var guard = new AdminGuard(dbf, events, Options.Create(new PanelOptions())); // AuthDisabled=false default: exercises the real DB-backed authz path
         var orch = new ServerOrchestrator(sup, api, backup, events, guard) { Delay = (_, _) => Task.CompletedTask };
         return (orch, events, order);
     }
