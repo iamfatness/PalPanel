@@ -18,4 +18,7 @@ public class PanelOptions
     public string AccessTeamDomain { get; set; } = "";   // e.g. https://yourteam.cloudflareaccess.com
     public string AccessAud { get; set; } = "";          // Access application AUD tag
     public bool AuthDisabled { get; set; } = false;      // dev only
+    public string GoogleClientId { get; set; } = "";
+    public string GoogleClientSecret { get; set; } = "";
+    public int CookieDaysValid { get; set; } = 7;
 }

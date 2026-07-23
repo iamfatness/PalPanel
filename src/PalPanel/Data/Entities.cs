@@ -47,6 +47,10 @@ public class PanelUser
     public string Role { get; set; } = "Viewer";
     public DateTimeOffset FirstSeen { get; set; }
     public DateTimeOffset LastSeen { get; set; }
+    public string? PasswordHash { get; set; }
+    public bool MustChangePassword { get; set; }
+    public int FailedLoginCount { get; set; }
+    public DateTimeOffset? LockedUntil { get; set; }
 }
 
 public class Schedule

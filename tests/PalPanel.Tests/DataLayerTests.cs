@@ -25,4 +25,33 @@ public class DataLayerTests
         Assert.Single(db.Samples); Assert.Single(db.Events); Assert.Single(db.Users);
         Assert.Single(db.Sessions); Assert.Single(db.Schedules);
     }
+
+    [Fact]
+    public void CanRoundTripPanelUserAuthFields()
+    {
+        using var db = NewDb();
+        var now = DateTimeOffset.UtcNow;
+        var lockedUntil = now.AddHours(1);
+        db.Users.Add(new PanelUser
+        {
+            Email = "auth@test.com",
+            Role = "Admin",
+            FirstSeen = now,
+            LastSeen = now,
+            PasswordHash = "bcrypt$2b$12$...",
+            MustChangePassword = true,
+            FailedLoginCount = 3,
+            LockedUntil = lockedUntil
+        });
+        db.SaveChanges();
+
+        // Reload from db
+        db.ChangeTracker.Clear();
+        var user = db.Users.Single(u => u.Email == "auth@test.com");
+
+        Assert.Equal("bcrypt$2b$12$...", user.PasswordHash);
+        Assert.True(user.MustChangePassword);
+        Assert.Equal(3, user.FailedLoginCount);
+        Assert.Equal(lockedUntil, user.LockedUntil);
+    }
 }
