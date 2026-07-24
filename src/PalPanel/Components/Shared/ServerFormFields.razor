@@ -1,0 +1,31 @@
+@using PalPanel.Data
+@* Shared editable fields for a ServerConfig, used by the add and edit pages. Password is
+   handled separately (write-only) so an existing encrypted secret is never round-tripped. *@
+
+<div class="form-grid">
+    <label>Name<input @bind="Model.Name" @bind:event="oninput" placeholder="e.g. Main" /></label>
+    <label>Executable path<input @bind="Model.ExePath" @bind:event="oninput" placeholder="C:\PalServer\PalServer.exe" /></label>
+    <label>Working directory<input @bind="Model.WorkingDir" @bind:event="oninput" placeholder="(defaults to the exe's folder)" /></label>
+    <label>Launch args<input @bind="Model.LaunchArgs" @bind:event="oninput" placeholder="-publiclobby" /></label>
+    <label>Process name<input @bind="Model.ProcessName" @bind:event="oninput" placeholder="PalServer (must be unique)" /></label>
+    <label>Save directory<input @bind="Model.SaveDirectory" @bind:event="oninput" placeholder="C:\PalServer\Pal\Saved" /></label>
+    <label>Backup directory<input @bind="Model.BackupDirectory" @bind:event="oninput" placeholder="C:\PalPanel\Backups\Main" /></label>
+    <label>Backups to keep<input type="number" @bind="Model.BackupsToKeep" /></label>
+    <label>REST API base URL<input @bind="Model.ApiBaseUrl" @bind:event="oninput" placeholder="http://localhost:8212" /></label>
+    <label>Admin password<input type="password" value="@Password" @oninput="OnPwInput" placeholder="@PasswordPlaceholder" /></label>
+    <label>Poll interval (s)<input type="number" @bind="Model.PollIntervalSeconds" /></label>
+    <label>Graceful stop timeout (s)<input type="number" @bind="Model.GracefulStopTimeoutSeconds" /></label>
+    <label>Max crashes in window<input type="number" @bind="Model.MaxCrashesInWindow" /></label>
+    <label>Crash window (min)<input type="number" @bind="Model.CrashWindowMinutes" /></label>
+    <label class="checkbox"><input type="checkbox" @bind="Model.AutoRestart" /> Auto-restart on crash</label>
+    <label class="checkbox"><input type="checkbox" @bind="Model.Enabled" /> Enabled</label>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ServerConfig Model { get; set; } = default!;
+    [Parameter] public string Password { get; set; } = "";
+    [Parameter] public EventCallback<string> PasswordChanged { get; set; }
+    [Parameter] public string PasswordPlaceholder { get; set; } = "REST API admin password";
+
+    private Task OnPwInput(ChangeEventArgs e) => PasswordChanged.InvokeAsync(e.Value?.ToString() ?? "");
+}

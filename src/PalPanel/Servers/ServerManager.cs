@@ -6,6 +6,14 @@ using PalPanel.Supervisor;
 
 namespace PalPanel.Servers;
 
+// The read surface poller/scheduler/UI use to reach live server runtimes. Implemented by
+// ServerManager; abstracted so those consumers can be tested with fake runtimes.
+public interface IServerRegistry
+{
+    IReadOnlyCollection<ServerRuntime> All();
+    ServerRuntime? Get(Guid id);
+}
+
 // Owns the live ServerRuntime per enabled server and is the single entry point the UI, poller,
 // and scheduler use to reach a server. Config lives in the DB (Servers table); this keeps the
 // in-memory runtimes in sync with it.
@@ -19,7 +27,7 @@ public sealed class ServerManager(
     IHttpClientFactory httpFactory,
     IAdminGuard guard,
     ISecretProtector protector,
-    ILogger<ServerManager>? log = null)
+    ILogger<ServerManager>? log = null) : IServerRegistry
 {
     private readonly ConcurrentDictionary<Guid, ServerRuntime> _runtimes = new();
 

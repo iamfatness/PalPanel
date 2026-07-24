@@ -98,20 +98,27 @@ public class BackupDownloadEndpointTests : IAsyncLifetime
         await db.SaveChangesAsync();
     }
 
-    private async Task<string> CreateBackupAsync()
+    // The seeded "Main" server's id (LegacyServerMigration seeds one from PanelOptions at startup).
+    private Guid ServerId()
     {
-        using var scope = _factory.Services.CreateScope();
-        var backups = scope.ServiceProvider.GetRequiredService<PalPanel.Control.IBackupService>();
-        var path = await backups.CreateBackupAsync("test", CancellationToken.None);
-        return Path.GetFileName(path);
+        var manager = _factory.Services.GetRequiredService<PalPanel.Servers.ServerManager>();
+        return manager.All().First().Id;
+    }
+
+    private async Task<(Guid ServerId, string FileName)> CreateBackupAsync()
+    {
+        var manager = _factory.Services.GetRequiredService<PalPanel.Servers.ServerManager>();
+        var rt = manager.All().First();
+        var path = await rt.Backups.CreateBackupAsync("test", CancellationToken.None);
+        return (rt.Id, Path.GetFileName(path));
     }
 
     [Fact]
     public async Task Admin_KnownFile_Returns200_WithZipContent()
     {
         await SeedUserAsync("admin@x.com", "Admin");
-        var fileName = await CreateBackupAsync();
-        var resp = await ClientWithCookie("admin@x.com", "Admin").GetAsync($"/backups/download/{fileName}");
+        var (sid, fileName) = await CreateBackupAsync();
+        var resp = await ClientWithCookie("admin@x.com", "Admin").GetAsync($"/backups/download/{sid}/{fileName}");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         Assert.Equal("application/zip", resp.Content.Headers.ContentType?.MediaType);
         var bytes = await resp.Content.ReadAsByteArrayAsync();
@@ -122,7 +129,7 @@ public class BackupDownloadEndpointTests : IAsyncLifetime
     public async Task Admin_UnknownFile_Returns404()
     {
         await SeedUserAsync("admin@x.com", "Admin");
-        var resp = await ClientWithCookie("admin@x.com", "Admin").GetAsync("/backups/download/nonexistent.zip");
+        var resp = await ClientWithCookie("admin@x.com", "Admin").GetAsync($"/backups/download/{ServerId()}/nonexistent.zip");
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 
@@ -133,8 +140,8 @@ public class BackupDownloadEndpointTests : IAsyncLifetime
         // authenticated user as Viewer in the DB so the check is proven DB-authoritative rather
         // than merely "no matching Users row" (which would also 403 for an unrelated reason).
         await SeedUserAsync("viewer@x.com", "Viewer");
-        var fileName = await CreateBackupAsync();
-        var resp = await ClientWithCookie("viewer@x.com", "Viewer").GetAsync($"/backups/download/{fileName}");
+        var (sid, fileName) = await CreateBackupAsync();
+        var resp = await ClientWithCookie("viewer@x.com", "Viewer").GetAsync($"/backups/download/{sid}/{fileName}");
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
     }
 
@@ -146,21 +153,21 @@ public class BackupDownloadEndpointTests : IAsyncLifetime
         // row backing that email has since been demoted to Viewer. Authorization must follow the
         // DB, not the stale claim baked into the cookie.
         await SeedUserAsync("stale-admin@x.com", "Admin");
-        var fileName = await CreateBackupAsync();
+        var (sid, fileName) = await CreateBackupAsync();
         var client = ClientWithCookie("stale-admin@x.com", "Admin"); // cookie claim says Admin
 
         await SeedUserAsync("stale-admin@x.com", "Viewer"); // DB now says Viewer
 
-        var resp = await client.GetAsync($"/backups/download/{fileName}");
+        var resp = await client.GetAsync($"/backups/download/{sid}/{fileName}");
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
     }
 
     [Fact]
     public async Task Unauthenticated_KnownFile_RedirectsToLogin()
     {
-        var fileName = await CreateBackupAsync();
+        var (sid, fileName) = await CreateBackupAsync();
         var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
-        var resp = await client.GetAsync($"/backups/download/{fileName}");
+        var resp = await client.GetAsync($"/backups/download/{sid}/{fileName}");
         Assert.Equal(HttpStatusCode.Redirect, resp.StatusCode);
         Assert.Contains("/login", resp.Headers.Location!.ToString());
     }
@@ -172,7 +179,7 @@ public class BackupDownloadEndpointTests : IAsyncLifetime
         // BackupDirectory) rather than combining the raw route value into a path, so a
         // traversal attempt simply isn't found -- it can never resolve outside BackupDirectory.
         await SeedUserAsync("admin@x.com", "Admin");
-        var resp = await ClientWithCookie("admin@x.com", "Admin").GetAsync("/backups/download/..%2f..%2fWindows%2fwin.ini");
+        var resp = await ClientWithCookie("admin@x.com", "Admin").GetAsync($"/backups/download/{ServerId()}/..%2f..%2fWindows%2fwin.ini");
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 }

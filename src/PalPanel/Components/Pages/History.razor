@@ -1,12 +1,20 @@
-@page "/history"
+@page "/s/{Id:guid}/history"
 @using Microsoft.EntityFrameworkCore
 @using PalPanel.Data
+@using PalPanel.Servers
 @inject IDbContextFactory<PanelDb> DbFactory
+@inject ServerManager Manager
 @inject IJSRuntime JS
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — History</PageTitle>
 
+@if (Manager.Get(Id) is null)
+{
+    <ServerNotFound />
+}
+else
+{
 <h1>History</h1>
 
 <div class="actions">
@@ -68,7 +76,11 @@
     </tbody>
 </table>
 
+}
+
 @code {
+    [Parameter] public Guid Id { get; set; }
+
     private const int MaxChartPoints = 300;
 
     private string _range = "24h";
@@ -88,7 +100,7 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        if (firstRender && Manager.Get(Id) is not null)
             await RenderChartsAsync();
     }
 
@@ -121,7 +133,7 @@
         // RetentionService.cs) — load then sort/take client-side. The type filter dropdown is
         // populated from the distinct types actually present in those 200 loaded rows, so
         // filtering is a pure client-side re-render with no extra DB round trip.
-        var allEvents = await db.Events.ToListAsync();
+        var allEvents = await db.Events.Where(e => e.ServerId == Id).ToListAsync();
         _events = allEvents.OrderByDescending(e => e.Ts).Take(200).ToList();
         _eventTypes = _events.Select(e => e.Type).Distinct().OrderBy(t => t).ToList();
         if (!string.IsNullOrEmpty(_typeFilter) && !_eventTypes.Contains(_typeFilter))
@@ -134,7 +146,7 @@
         // Raw Samples are only ever written by PollerService while the server is Running AND
         // the REST API is reachable — so a gap here (uptime % below 100) reflects genuine
         // downtime/unreachability, not missing instrumentation.
-        var rows = (await db.Samples.ToListAsync())
+        var rows = (await db.Samples.Where(s => s.ServerId == Id).ToListAsync())
             .Where(s => s.Ts >= since)
             .OrderBy(s => s.Ts)
             .ToList();
@@ -152,7 +164,7 @@
         int expectedSlots, string labelFormat)
     {
         var since = now - window;
-        var rows = (await db.SampleRollups.ToListAsync())
+        var rows = (await db.SampleRollups.Where(r => r.ServerId == Id).ToListAsync())
             .Where(r => r.Granularity == granularity && r.Ts >= since)
             .OrderBy(r => r.Ts)
             .ToList();

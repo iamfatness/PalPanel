@@ -1,18 +1,24 @@
-@page "/players"
+@page "/s/{Id:guid}/players"
 @using Microsoft.EntityFrameworkCore
 @using PalPanel.Control
 @using PalPanel.Data
 @using PalPanel.Monitoring
 @using PalPanel.PalApi
+@using PalPanel.Servers
 @implements IDisposable
-@inject SnapshotService Snap
-@inject IServerOrchestrator Orch
+@inject ServerManager Manager
 @inject AuthenticationStateProvider AuthState
 @inject IDbContextFactory<PanelDb> DbFactory
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — Players</PageTitle>
 
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
 <h1>Players</h1>
 
 @if (_error is not null)
@@ -88,8 +94,12 @@
 </table>
 
 <ConfirmDialog @ref="_confirm" />
+}
 
 @code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerRuntime? _rt;
     private ServerSnapshot _s = null!;
     private string _email = "";
     private ConfirmDialog _confirm = null!;
@@ -98,10 +108,14 @@
     private List<PlayerSession> _recentSessions = [];
     private List<(string UserId, string Name, TimeSpan Total)> _totalPlaytime = [];
 
+    private IServerOrchestrator Orch => _rt!.Orchestrator;
+
     protected override async Task OnInitializedAsync()
     {
-        _s = Snap.Current;
-        Snap.Changed += OnSnapshot;
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        _s = _rt.Snapshot.Current;
+        _rt.Snapshot.Changed += OnSnapshot;
         var auth = await AuthState.GetAuthenticationStateAsync();
         _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
         await LoadSessionsAsync();
@@ -118,7 +132,7 @@
         // EF Core's Sqlite provider cannot translate DateTimeOffset Where/OrderBy server-side
         // (see Overview.razor / RetentionService.cs for the same established workaround) —
         // load the (retention-bounded) table then filter/sort/group client-side.
-        var all = await db.Sessions.ToListAsync();
+        var all = await db.Sessions.Where(s => s.ServerId == Id).ToListAsync();
         _recentSessions = all.OrderByDescending(s => s.JoinedAt).Take(50).ToList();
 
         var now = DateTimeOffset.UtcNow;
@@ -156,5 +170,5 @@
     private static string FormatDuration(TimeSpan t) =>
         t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h {t.Minutes}m" : $"{(int)t.TotalHours}h {t.Minutes}m";
 
-    public void Dispose() => Snap.Changed -= OnSnapshot;
+    public void Dispose() { if (_rt is not null) _rt.Snapshot.Changed -= OnSnapshot; }
 }

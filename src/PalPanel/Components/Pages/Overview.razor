@@ -1,19 +1,26 @@
-@page "/"
+@page "/s/{Id:guid}"
 @using Microsoft.EntityFrameworkCore
 @using PalPanel.Control
 @using PalPanel.Data
 @using PalPanel.Monitoring
+@using PalPanel.Servers
 @using PalPanel.Supervisor
 @implements IDisposable
-@inject SnapshotService Snap
-@inject IServerOrchestrator Orch
+@inject ServerManager Manager
 @inject AuthenticationStateProvider AuthState
 @inject IDbContextFactory<PanelDb> DbFactory
 @inject IJSRuntime JS
+@inject NavigationManager Nav
 @rendermode InteractiveServer
 
-<PageTitle>PalPanel — Overview</PageTitle>
+<PageTitle>PalPanel — @(_rt?.Config.Name ?? "Server")</PageTitle>
 
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
 <div class="status-card @StateCss(_s.State)">
     <h1>@(_s.Info?.ServerName ?? "Palworld Server")</h1>
     <div class="state">@StateLabel(_s)</div>
@@ -48,8 +55,12 @@
 </div>
 
 <ConfirmDialog @ref="_confirm" />
+}
 
 @code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerRuntime? _rt;
     private ServerSnapshot _s = null!;
     private string _email = "";
     private string _announceText = "";
@@ -58,20 +69,24 @@
     private string? _error;
     private DateTimeOffset _lastChartRefresh = DateTimeOffset.MinValue;
 
+    private IServerOrchestrator Orch => _rt!.Orchestrator;
+
     private bool CanStart => !_busy && _s.State is ServerState.Stopped or ServerState.Held;
     private bool CanStop => !_busy && _s.State is ServerState.Running or ServerState.Starting;
 
     protected override async Task OnInitializedAsync()
     {
-        _s = Snap.Current;
-        Snap.Changed += OnSnapshot;
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        _s = _rt.Snapshot.Current;
+        _rt.Snapshot.Changed += OnSnapshot;
         var auth = await AuthState.GetAuthenticationStateAsync();
         _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        if (firstRender && _rt is not null)
             await RenderChartsAsync();
     }
 
@@ -114,7 +129,7 @@
         // capped at ~48h by RetentionService, so loading them all untouched and then
         // filtering/sorting client-side (the same pattern RetentionService itself uses
         // for its own Ts comparisons) is cheap.
-        var rows = (await db.Samples.ToListAsync())
+        var rows = (await db.Samples.Where(s => s.ServerId == Id).ToListAsync())
             .Where(s => s.Ts >= since)
             .OrderBy(s => s.Ts)
             .ToList();
@@ -165,5 +180,5 @@
     private static string FormatUptime(TimeSpan t) =>
         t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h" : $"{t.Hours}h {t.Minutes}m";
 
-    public void Dispose() => Snap.Changed -= OnSnapshot;
+    public void Dispose() { if (_rt is not null) _rt.Snapshot.Changed -= OnSnapshot; }
 }

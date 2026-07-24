@@ -1,0 +1,121 @@
+@page "/"
+@using PalPanel.Control
+@using PalPanel.Monitoring
+@using PalPanel.Servers
+@using PalPanel.Supervisor
+@implements IDisposable
+@inject ServerManager Manager
+@inject AuthenticationStateProvider AuthState
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Fleet</PageTitle>
+
+<div class="fleet-header">
+    <h1>Fleet</h1>
+    <AuthorizeView Roles="Admin"><Authorized>
+        <a class="button" href="/servers/new">Add server</a>
+    </Authorized></AuthorizeView>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert">@_error</div>
+}
+
+@if (_runtimes.Count == 0)
+{
+    <div class="empty-state">
+        <p>No servers yet.</p>
+        <AuthorizeView Roles="Admin"><Authorized>
+            <a class="button" href="/servers/new">Add your first server</a>
+        </Authorized></AuthorizeView>
+    </div>
+}
+else
+{
+    <div class="fleet-grid">
+        @foreach (var rt in _runtimes)
+        {
+            var s = Snap(rt.Id);
+            <div class="fleet-card @StateCss(s.State)">
+                <a class="fleet-card-title" href="@($"/s/{rt.Id}")">
+                    <h2>@rt.Config.Name</h2>
+                    <span class="state-badge">@StateLabel(s)</span>
+                </a>
+                <div class="fleet-card-metrics">
+                    <div class="metric"><span class="metric-value">@s.Players.Count</span><span class="metric-label">/ @(s.Metrics?.MaxPlayerNum ?? 32) players</span></div>
+                    <div class="metric"><span class="metric-value">@FormatMem(s.MemoryBytes)</span><span class="metric-label">memory</span></div>
+                    <div class="metric"><span class="metric-value">@Uptime(s)</span><span class="metric-label">uptime</span></div>
+                </div>
+                <AuthorizeView Roles="Admin"><Authorized>
+                    <div class="fleet-card-actions">
+                        <button disabled="@(!CanStart(s))" @onclick="() => Do(rt, ct => rt.Orchestrator.StartAsync(_email, ct))">Start</button>
+                        <button disabled="@(!CanStop(s))" @onclick="() => Do(rt, ct => rt.Orchestrator.StopAsync(_email, ct))">Stop</button>
+                        <a href="@($"/s/{rt.Id}")">Manage →</a>
+                    </div>
+                </Authorized></AuthorizeView>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private IReadOnlyCollection<ServerRuntime> _runtimes = [];
+    private readonly Dictionary<Guid, ServerSnapshot> _snaps = new();
+    private string _email = "";
+    private string? _error;
+
+    private ServerSnapshot Snap(Guid id) =>
+        _snaps.TryGetValue(id, out var s) ? s : new ServerSnapshot(ServerState.Stopped, false, null, [], null, 0, null, DateTimeOffset.UtcNow);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        _runtimes = Manager.All();
+        foreach (var rt in _runtimes)
+        {
+            _snaps[rt.Id] = rt.Snapshot.Current;
+            rt.Snapshot.Changed += OnSnapshot;
+        }
+    }
+
+    private void OnSnapshot(ServerSnapshot s)
+    {
+        // Match the snapshot to its runtime by identity: each runtime's SnapshotService raises
+        // its own Changed, but the payload doesn't carry the id, so resolve via Current.
+        InvokeAsync(() =>
+        {
+            foreach (var rt in _runtimes)
+                _snaps[rt.Id] = rt.Snapshot.Current;
+            StateHasChanged();
+        });
+    }
+
+    private async Task Do(ServerRuntime rt, Func<CancellationToken, Task> action)
+    {
+        _error = null;
+        try { await action(CancellationToken.None); }
+        catch (Exception ex) { _error = $"{rt.Config.Name}: {ex.Message}"; }
+    }
+
+    private static bool CanStart(ServerSnapshot s) => s.State is ServerState.Stopped or ServerState.Held;
+    private static bool CanStop(ServerSnapshot s) => s.State is ServerState.Running or ServerState.Starting;
+
+    private static string StateCss(ServerState s) => s switch
+    { ServerState.Running => "ok", ServerState.Held or ServerState.Crashed => "bad", _ => "warn" };
+    private static string StateLabel(ServerSnapshot s) =>
+        s.State == ServerState.Running && !s.ApiReachable ? "Running — API unreachable" : s.State.ToString();
+    private static string FormatMem(long bytes) => bytes <= 0 ? "—" : $"{bytes / 1_073_741_824.0:0.0} GB";
+    private static string Uptime(ServerSnapshot s)
+    {
+        if (s.State != ServerState.Running || s.RunningSince is null) return "—";
+        var t = DateTimeOffset.UtcNow - s.RunningSince.Value;
+        return t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h" : $"{t.Hours}h {t.Minutes}m";
+    }
+
+    public void Dispose()
+    {
+        foreach (var rt in _runtimes) rt.Snapshot.Changed -= OnSnapshot;
+    }
+}

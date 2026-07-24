@@ -4,14 +4,15 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using PalPanel.Data;
+using PalPanel.Servers;
 namespace PalPanel.Control;
 
 // Checks enabled Schedule rows once a minute and fires the corresponding action (restart
-// ritual or on-demand backup) at most once per due minute.
+// ritual or on-demand backup) at most once per due minute, against the runtime named by the
+// schedule's ServerId. Schedules whose server is gone/disabled are logged and skipped.
 public class SchedulerService(
     IDbContextFactory<PanelDb> dbf,
-    IServerOrchestrator orchestrator,
-    IBackupService backups,
+    IServerRegistry registry,
     IEventSink events,
     ILogger<SchedulerService>? logger = null,
     DateTimeOffset? initialLastCheck = null) : BackgroundService
@@ -85,17 +86,26 @@ public class SchedulerService(
         var lastFired = _lastFired.TryGetValue(s.Id, out var lf) ? lf : DateTimeOffset.MinValue;
         if (occurrenceOffset <= lastFired) return; // already fired for this due minute
 
+        var rt = registry.Get(s.ServerId);
+        if (rt is null)
+        {
+            // Server removed/disabled out from under the schedule — warn once, don't retry-storm.
+            if (_invalidCronWarned.Add(s.Id))
+                await events.LogAsync("schedule-error", $"Schedule {s.Id} targets unknown/disabled server {s.ServerId}; skipping");
+            return;
+        }
+
         _lastFired[s.Id] = occurrenceOffset; // record before firing: a throwing action must not retry-storm
         switch (s.Action)
         {
             case "restart":
-                await orchestrator.RestartAsync("scheduler", [10, 5, 1], ct);
+                await rt.Orchestrator.RestartAsync("scheduler", [10, 5, 1], ct);
                 break;
             case "backup":
-                await backups.CreateBackupAsync("scheduled", ct);
+                await rt.Backups.CreateBackupAsync("scheduled", ct);
                 break;
             default:
-                await events.LogAsync("schedule-error", $"Unknown schedule action '{s.Action}' on schedule {s.Id}");
+                await rt.Events.LogAsync("schedule-error", $"Unknown schedule action '{s.Action}' on schedule {s.Id}");
                 break;
         }
     }

@@ -1,9 +1,69 @@
+@using System.Text.RegularExpressions
+@using PalPanel.Servers
+@implements IDisposable
+@inject ServerManager Manager
+@inject NavigationManager Nav
+
 <ul class="nav-menu">
-    <li><NavLink href="/" Match="NavLinkMatch.All">Overview</NavLink></li>
-    <li><NavLink href="/players">Players</NavLink></li>
-    <li><NavLink href="/history">History</NavLink></li>
+    <li><NavLink href="/" Match="NavLinkMatch.All">Fleet</NavLink></li>
+
+    @if (_currentServer is not null)
+    {
+        <li class="nav-section">
+            <span class="nav-server-name">@(_currentServer.Config.Name)</span>
+            @if (_others.Count > 0)
+            {
+                <select class="nav-switcher" @onchange="SwitchServer">
+                    @foreach (var rt in Manager.All())
+                    {
+                        <option value="@rt.Id" selected="@(rt.Id == _currentServer.Id)">@rt.Config.Name</option>
+                    }
+                </select>
+            }
+        </li>
+        <li><NavLink href="@($"/s/{_currentServer.Id}")" Match="NavLinkMatch.All">Overview</NavLink></li>
+        <li><NavLink href="@($"/s/{_currentServer.Id}/players")">Players</NavLink></li>
+        <li><NavLink href="@($"/s/{_currentServer.Id}/history")">History</NavLink></li>
+        <AuthorizeView Roles="Admin">
+            <li><NavLink href="@($"/s/{_currentServer.Id}/backups")">Backups</NavLink></li>
+            <li><NavLink href="@($"/s/{_currentServer.Id}/settings")">Server settings</NavLink></li>
+        </AuthorizeView>
+    }
+
     <AuthorizeView Roles="Admin">
-        <li><NavLink href="/backups">Backups</NavLink></li>
-        <li><NavLink href="/settings">Settings</NavLink></li>
+        <li class="nav-section"><NavLink href="/settings">Panel settings</NavLink></li>
     </AuthorizeView>
 </ul>
+
+@code {
+    private static readonly Regex ServerRoute = new(@"/s/(?<id>[0-9a-fA-F-]{36})", RegexOptions.Compiled);
+    private ServerRuntime? _currentServer;
+    private List<ServerRuntime> _others = [];
+
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        Resolve();
+    }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        Resolve();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Resolve()
+    {
+        var m = ServerRoute.Match(Nav.ToBaseRelativePath(Nav.Uri));
+        _currentServer = m.Success && Guid.TryParse(m.Groups["id"].Value, out var id) ? Manager.Get(id) : null;
+        _others = _currentServer is null ? [] : Manager.All().Where(r => r.Id != _currentServer.Id).ToList();
+    }
+
+    private void SwitchServer(ChangeEventArgs e)
+    {
+        if (Guid.TryParse(e.Value?.ToString(), out var id))
+            Nav.NavigateTo($"/s/{id}");
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}
