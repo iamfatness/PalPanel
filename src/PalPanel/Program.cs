@@ -192,6 +192,10 @@ using (var scope = app.Services.CreateScope())
     await using var db = await dbf.CreateDbContextAsync();
     await db.Database.EnsureCreatedAsync();
 
+    // EnsureCreated is a no-op on an existing (pre-multi-server) DB, so patch in the Servers
+    // table + ServerId columns idempotently before anything reads the new shape.
+    await PalPanel.Data.SchemaUpgrade.ApplyAsync(db);
+
     // Upgrade path: on first boot after multi-server, seed one server from the legacy
     // single-server PanelOptions and stamp existing rows to it (idempotent, no-op afterwards).
     var legacy = scope.ServiceProvider.GetRequiredService<IOptions<PalPanel.PanelOptions>>().Value;
