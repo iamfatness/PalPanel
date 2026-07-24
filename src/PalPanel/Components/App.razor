@@ -13,7 +13,20 @@
 <body>
     <Routes />
     <ReconnectModal />
-    <script src="_framework/blazor.web.js"></script>
+    <script src="_framework/blazor.web.js" autostart="false"></script>
+    <script>
+        // Extend the client-side reconnect budget (default is ~8 quick retries) so a tunnel
+        // blip doesn't exhaust retries and strand the user on "Failed to rejoin". We do NOT
+        // pass a custom reconnectionHandler — omitting it keeps Blazor's built-in reconnect
+        // modal (#components-reconnect-modal, see ReconnectModal.razor), which already shows
+        // Retry + reload messaging. Server-side circuit retention (Program.cs) lets these
+        // retries resume the SAME circuit rather than reset component state.
+        Blazor.start({
+            circuit: {
+                reconnectionOptions: { maxRetries: 30, retryIntervalMilliseconds: 3000 }
+            }
+        });
+    </script>
     <script src="lib/chart.umd.js"></script>
     <script src="js/charts.js"></script>
 </body>

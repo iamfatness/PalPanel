@@ -159,7 +159,16 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
     o.KnownProxies.Clear();
 });
 
-builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+builder.Services.AddRazorComponents().AddInteractiveServerComponents(o =>
+{
+    // Through the Cloudflare Tunnel a SignalR circuit can briefly drop (idle upgrade, edge
+    // hiccup). Retain the disconnected circuit server-side for a few minutes so a client that
+    // reconnects RESUMES its exact circuit (component state intact) instead of getting a fresh
+    // one — the difference between "buttons work again" and "everything reset". Paired with the
+    // extended client-side reconnect retries in App.razor.
+    o.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(3);
+    o.DisconnectedCircuitMaxRetained = 100;
+});
 
 var app = builder.Build();
 
