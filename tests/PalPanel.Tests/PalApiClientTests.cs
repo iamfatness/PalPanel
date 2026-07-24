@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Options;
-using PalPanel;
 using PalPanel.PalApi;
 
 public class PalApiClientTests : IAsyncLifetime
@@ -10,8 +8,7 @@ public class PalApiClientTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _stub = new StubPalServer { PlayerNames = ["Alice", "Bob"] };
-        var o = Options.Create(new PanelOptions { ApiBaseUrl = _stub.BaseUrl, AdminPassword = "pw" });
-        _client = new PalApiClient(new HttpClient(), o);
+        _client = new PalApiClient(new HttpClient(), new PalApiSettings(_stub.BaseUrl, "pw"));
         return Task.CompletedTask;
     }
     public async Task DisposeAsync() => await _stub.DisposeAsync();

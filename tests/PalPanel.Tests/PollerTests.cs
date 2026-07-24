@@ -24,7 +24,7 @@ public class PollerTests : IAsyncLifetime
         var sp = services.BuildServiceProvider();
         _dbf = sp.GetRequiredService<IDbContextFactory<PanelDb>>();
         using (var db = _dbf.CreateDbContext()) db.Database.EnsureCreated();
-        var api = new PalApiClient(new HttpClient(), o);
+        var api = new PalApiClient(new HttpClient(), new PalApiSettings(_stub.BaseUrl, "pw"));
         _poller = new PollerService(api, _sup, _snap, _dbf, new DbEventSink(_dbf), o);
         return Task.CompletedTask;
     }

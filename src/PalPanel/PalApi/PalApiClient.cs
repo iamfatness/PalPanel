@@ -1,20 +1,24 @@
-using Microsoft.Extensions.Options;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 
 namespace PalPanel.PalApi;
 
+// Per-server connection settings for the Palworld REST API. Previously sourced from the
+// single-server PanelOptions; now supplied per ServerRuntime so each managed server talks to
+// its own endpoint with its own admin password.
+public record PalApiSettings(string BaseUrl, string AdminPassword);
+
 public class PalApiClient : IPalApi
 {
     private readonly HttpClient _http;
 
-    public PalApiClient(HttpClient http, IOptions<PanelOptions> opts)
+    public PalApiClient(HttpClient http, PalApiSettings settings)
     {
         _http = http;
-        _http.BaseAddress = new Uri(opts.Value.ApiBaseUrl.TrimEnd('/') + "/v1/api/");
+        _http.BaseAddress = new Uri(settings.BaseUrl.TrimEnd('/') + "/v1/api/");
         _http.Timeout = TimeSpan.FromSeconds(5);
-        var cred = Convert.ToBase64String(Encoding.UTF8.GetBytes($"admin:{opts.Value.AdminPassword}"));
+        var cred = Convert.ToBase64String(Encoding.UTF8.GetBytes($"admin:{settings.AdminPassword}"));
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", cred);
     }
 
