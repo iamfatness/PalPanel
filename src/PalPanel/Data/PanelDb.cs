@@ -4,6 +4,7 @@ namespace PalPanel.Data;
 
 public class PanelDb(DbContextOptions<PanelDb> options) : DbContext(options)
 {
+    public DbSet<ServerConfig> Servers => Set<ServerConfig>();
     public DbSet<Sample> Samples => Set<Sample>();
     public DbSet<SampleRollup> SampleRollups => Set<SampleRollup>();
     public DbSet<PlayerSession> Sessions => Set<PlayerSession>();
@@ -13,11 +14,14 @@ public class PanelDb(DbContextOptions<PanelDb> options) : DbContext(options)
 
     protected override void OnModelCreating(ModelBuilder b)
     {
-        b.Entity<Sample>().HasIndex(s => s.Ts);
-        b.Entity<SampleRollup>().HasIndex(r => new { r.Granularity, r.Ts });
+        // Per-server rows are almost always queried scoped to one server and ordered/keyed
+        // within it, so the ServerId-leading composite indexes match the real access paths.
+        b.Entity<Sample>().HasIndex(s => new { s.ServerId, s.Ts });
+        b.Entity<SampleRollup>().HasIndex(r => new { r.ServerId, r.Granularity, r.Ts });
         b.Entity<PanelUser>().HasIndex(u => u.Email).IsUnique();
-        b.Entity<PlayerSession>().HasIndex(s => s.UserId);
-        b.Entity<EventLog>().HasIndex(e => e.Ts);
+        b.Entity<PlayerSession>().HasIndex(s => new { s.ServerId, s.UserId });
+        b.Entity<EventLog>().HasIndex(e => new { e.ServerId, e.Ts });
+        b.Entity<Schedule>().HasIndex(s => s.ServerId);
     }
 }
 
