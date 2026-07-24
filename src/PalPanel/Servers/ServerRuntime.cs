@@ -33,6 +33,12 @@ public sealed class ServerRuntime
         Backups = backups; Snapshot = snap; Events = events;
     }
 
+    // Compose a runtime from already-built parts. Used by Build and by tests that need to
+    // inject stub/fault-injecting collaborators (a throwing API or event sink).
+    public static ServerRuntime FromParts(ServerConfig cfg, ProcessSupervisor sup, IPalApi api,
+        IServerOrchestrator orch, IBackupService backups, SnapshotService snap, IEventSink events)
+        => new(cfg, sup, api, orch, backups, snap, events);
+
     public static ServerRuntime Build(
         ServerConfig cfg,
         IProcessLauncher launcher,

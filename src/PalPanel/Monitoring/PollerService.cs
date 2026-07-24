@@ -1,66 +1,78 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
-using PalPanel.Data; using PalPanel.PalApi; using PalPanel.Supervisor;
+using PalPanel.Data; using PalPanel.PalApi; using PalPanel.Servers; using PalPanel.Supervisor;
 namespace PalPanel.Monitoring;
 
-public class PollerService(IPalApi api, ProcessSupervisor sup, SnapshotService snap,
-    IDbContextFactory<PanelDb> dbf, IEventSink events, IOptions<PanelOptions> opts,
+// Single background poller for the whole fleet: each tick it polls every live ServerRuntime
+// independently. Per-server state (online players, API-reachability edge, one-time session
+// reconciliation) is keyed by server id. A failure polling one server is caught and logged to
+// that server's event log; it never stalls the others or kills the loop.
+public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf,
     ILogger<PollerService>? log = null) : BackgroundService
 {
     private readonly ILogger _log = log ?? NullLogger<PollerService>.Instance;
-    private Dictionary<string, (long SessionId, string Name)> _online = [];
-    private bool _apiWasReachable = true;
-    private bool _reconciled;
+    private readonly ConcurrentDictionary<Guid, PollState> _state = new();
+
+    private sealed class PollState
+    {
+        public Dictionary<string, (long SessionId, string Name)> Online = [];
+        public bool ApiWasReachable = true;
+        public bool Reconciled;
+    }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            try { await TickAsync(ct); }
-            catch (Exception ex)
+            var runtimes = manager.All();
+            foreach (var rt in runtimes)
             {
-                // The event sink itself can fail (disk full, DB locked); that must never
-                // kill the poll loop / host — fall back to loud ILogger output instead.
-                try { await events.LogAsync("poller-error", ex.Message); }
-                catch (Exception sinkEx)
-                { _log.LogError(sinkEx, "Event sink write failed for poller-error: {Detail}", ex.Message); }
+                try { await TickServerAsync(rt, ct); }
+                catch (Exception ex)
+                {
+                    try { await rt.Events.LogAsync("poller-error", ex.Message); }
+                    catch (Exception sinkEx)
+                    { _log.LogError(sinkEx, "Event sink write failed for poller-error on {Server}: {Detail}", rt.Id, ex.Message); }
+                }
             }
-            await Task.Delay(TimeSpan.FromSeconds(opts.Value.PollIntervalSeconds), ct);
+            // Base cadence = the shortest configured interval among live servers (fallback 10s);
+            // every server is polled each tick. Keeps the shared loop simple and responsive.
+            var interval = runtimes.Count == 0 ? 10 : runtimes.Min(r => Math.Max(1, r.Config.PollIntervalSeconds));
+            await Task.Delay(TimeSpan.FromSeconds(interval), ct);
         }
     }
 
-    public async Task TickAsync(CancellationToken ct)
+    public async Task TickServerAsync(ServerRuntime rt, CancellationToken ct)
     {
-        // One-time startup reconciliation: after a panel restart (with or without
-        // adoption of a still-running PalServer), _online is empty but the DB may
-        // still hold open PlayerSession rows from the previous run. Close them all;
-        // players still online get fresh join rows from this tick's diff, which is
-        // correct-by-construction. Flag is set only after success so a transient DB
-        // failure retries on the next tick instead of leaving stale rows forever.
-        if (!_reconciled) { await ReconcileStaleSessionsAsync(ct); _reconciled = true; }
+        var st = _state.GetOrAdd(rt.Id, _ => new PollState());
 
+        // One-time startup reconciliation: close PlayerSession rows this server left open in a
+        // previous panel run. Players still online get fresh join rows from this tick's diff.
+        if (!st.Reconciled) { await ReconcileStaleSessionsAsync(rt, ct); st.Reconciled = true; }
+
+        var sup = rt.Supervisor;
         var state = sup.State;
         if (state is ServerState.Stopped or ServerState.Held or ServerState.Stopping)
         {
-            snap.Publish(new ServerSnapshot(state, false, null, [], null, 0, null, DateTimeOffset.UtcNow));
-            await CloseAllSessionsAsync();
+            rt.Snapshot.Publish(new ServerSnapshot(state, false, null, [], null, 0, null, DateTimeOffset.UtcNow));
+            await CloseAllSessionsAsync(rt, st);
             return;
         }
 
-        var info = await api.GetInfoAsync(ct);
+        var info = await rt.Api.GetInfoAsync(ct);
         var reachable = info is not null;
-        var players = reachable ? await api.GetPlayersAsync(ct) : [];
-        var metrics = reachable ? await api.GetMetricsAsync(ct) : null;
+        var players = reachable ? await rt.Api.GetPlayersAsync(ct) : [];
+        var metrics = reachable ? await rt.Api.GetMetricsAsync(ct) : null;
 
         if (reachable && state == ServerState.Starting) { sup.MarkRunning(); state = sup.State; }
-        if (!reachable && state == ServerState.Running && _apiWasReachable)
-            await events.LogAsync("api-unreachable", "Process alive but REST API not answering");
-        if (reachable && !_apiWasReachable)
-            await events.LogAsync("api-recovered", "REST API answering again");
-        _apiWasReachable = reachable;
+        if (!reachable && state == ServerState.Running && st.ApiWasReachable)
+            await rt.Events.LogAsync("api-unreachable", "Process alive but REST API not answering");
+        if (reachable && !st.ApiWasReachable)
+            await rt.Events.LogAsync("api-recovered", "REST API answering again");
+        st.ApiWasReachable = reachable;
 
-        snap.Publish(new ServerSnapshot(state, reachable, info, players, metrics,
+        rt.Snapshot.Publish(new ServerSnapshot(state, reachable, info, players, metrics,
             sup.CurrentMemoryBytes, sup.RunningSince, DateTimeOffset.UtcNow));
 
         if (state == ServerState.Running && reachable)
@@ -68,56 +80,56 @@ public class PollerService(IPalApi api, ProcessSupervisor sup, SnapshotService s
             await using var db = await dbf.CreateDbContextAsync(ct);
             db.Samples.Add(new Sample
             {
-                Ts = DateTimeOffset.UtcNow, Players = players.Count,
+                ServerId = rt.Id, Ts = DateTimeOffset.UtcNow, Players = players.Count,
                 Fps = metrics?.ServerFps ?? 0, FrameTimeMs = metrics?.ServerFrameTime ?? 0,
                 MemoryBytes = sup.CurrentMemoryBytes, UptimeSeconds = metrics?.Uptime ?? 0
             });
             await db.SaveChangesAsync(ct);
-            await DiffSessionsAsync(players);
+            await DiffSessionsAsync(rt, st, players);
         }
     }
 
-    private async Task DiffSessionsAsync(IReadOnlyList<PlayerInfo> players)
+    private async Task DiffSessionsAsync(ServerRuntime rt, PollState st, IReadOnlyList<PlayerInfo> players)
     {
         await using var db = await dbf.CreateDbContextAsync();
         var current = players.ToDictionary(p => p.UserId);
-        foreach (var p in players.Where(p => !_online.ContainsKey(p.UserId)))
+        foreach (var p in players.Where(p => !st.Online.ContainsKey(p.UserId)))
         {
-            var s = new PlayerSession { UserId = p.UserId, Name = p.Name, JoinedAt = DateTimeOffset.UtcNow };
+            var s = new PlayerSession { ServerId = rt.Id, UserId = p.UserId, Name = p.Name, JoinedAt = DateTimeOffset.UtcNow };
             db.Sessions.Add(s); await db.SaveChangesAsync();
-            _online[p.UserId] = (s.Id, p.Name);
-            await events.LogAsync("player-join", $"{p.Name} joined");
+            st.Online[p.UserId] = (s.Id, p.Name);
+            await rt.Events.LogAsync("player-join", $"{p.Name} joined");
         }
-        foreach (var (userId, v) in _online.Where(kv => !current.ContainsKey(kv.Key)).ToList())
+        foreach (var (userId, v) in st.Online.Where(kv => !current.ContainsKey(kv.Key)).ToList())
         {
             var s = await db.Sessions.FindAsync(v.SessionId);
             if (s is not null) { s.LeftAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(); }
-            _online.Remove(userId);
-            await events.LogAsync("player-leave", $"{v.Name} left");
+            st.Online.Remove(userId);
+            await rt.Events.LogAsync("player-leave", $"{v.Name} left");
         }
     }
 
-    private async Task ReconcileStaleSessionsAsync(CancellationToken ct)
+    private async Task ReconcileStaleSessionsAsync(ServerRuntime rt, CancellationToken ct)
     {
         await using var db = await dbf.CreateDbContextAsync(ct);
-        var stale = await db.Sessions.Where(s => s.LeftAt == null).ToListAsync(ct);
+        var stale = await db.Sessions.Where(s => s.ServerId == rt.Id && s.LeftAt == null).ToListAsync(ct);
         if (stale.Count == 0) return;
         var now = DateTimeOffset.UtcNow;
         foreach (var s in stale) s.LeftAt = now;
         await db.SaveChangesAsync(ct);
-        await events.LogAsync("sessions-reconciled", $"Closed {stale.Count} stale session(s) left open by a previous panel run");
+        await rt.Events.LogAsync("sessions-reconciled", $"Closed {stale.Count} stale session(s) left open by a previous panel run");
     }
 
-    private async Task CloseAllSessionsAsync()
+    private async Task CloseAllSessionsAsync(ServerRuntime rt, PollState st)
     {
-        if (_online.Count == 0) return;
+        if (st.Online.Count == 0) return;
         await using var db = await dbf.CreateDbContextAsync();
-        foreach (var (_, v) in _online)
+        foreach (var (_, v) in st.Online)
         {
             var s = await db.Sessions.FindAsync(v.SessionId);
             if (s is not null) s.LeftAt = DateTimeOffset.UtcNow;
         }
         await db.SaveChangesAsync();
-        _online.Clear();
+        st.Online.Clear();
     }
 }

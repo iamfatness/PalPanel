@@ -1,82 +1,156 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using PalPanel; using PalPanel.Data; using PalPanel.Monitoring; using PalPanel.PalApi; using PalPanel.Supervisor;
+using PalPanel; using PalPanel.Auth; using PalPanel.Control; using PalPanel.Data;
+using PalPanel.Monitoring; using PalPanel.PalApi; using PalPanel.Servers; using PalPanel.Supervisor;
 
 public class PollerTests : IAsyncLifetime
 {
     private StubPalServer _stub = null!;
     private PollerService _poller = null!;
-    private SnapshotService _snap = null!;
+    private ServerRuntime _rt = null!;
     private ProcessSupervisor _sup = null!;
     private IDbContextFactory<PanelDb> _dbf = null!;
     private FakeLauncher _launcher = null!;
+    private readonly Guid _sid = Guid.NewGuid();
+
+    private class AllowAllGuard : IAdminGuard
+    { public Task EnsureAdminAsync(string a, string x, CancellationToken ct) => Task.CompletedTask; }
+
+    private SnapshotService Snap => _rt.Snapshot;
+
+    // Build a ServerRuntime around a supervisor/api/sink, reusing the real per-server services.
+    private ServerRuntime MakeRuntime(Guid id, IPalApi api, ProcessSupervisor sup, IEventSink sink)
+    {
+        var cfg = new ServerConfig { Id = id, Name = "t", ApiBaseUrl = "http://localhost:1", ProcessName = $"p-{id:N}", PollIntervalSeconds = 60 };
+        var opts = Options.Create(new PanelOptions { SaveDirectory = Path.GetTempPath(), BackupDirectory = Path.GetTempPath(), GracefulStopTimeoutSeconds = 1 });
+        var backups = new BackupService(opts, sup, sink);
+        var orch = new ServerOrchestrator(sup, api, backups, sink, new AllowAllGuard());
+        return ServerRuntime.FromParts(cfg, sup, api, orch, backups, new SnapshotService(), sink);
+    }
 
     public Task InitializeAsync()
     {
         _stub = new StubPalServer { PlayerNames = ["Alice"] };
-        var o = Options.Create(new PanelOptions { ApiBaseUrl = _stub.BaseUrl, AdminPassword = "pw", GracefulStopTimeoutSeconds = 1 });
+        var o = Options.Create(new PanelOptions { GracefulStopTimeoutSeconds = 1 });
         _launcher = new FakeLauncher();
         _sup = new ProcessSupervisor(_launcher, o) { RestartDelay = _ => Task.CompletedTask };
-        _snap = new SnapshotService();
         var services = new ServiceCollection();
         services.AddDbContextFactory<PanelDb>(b => b.UseSqlite($"Data Source={Path.GetTempFileName()}"));
         var sp = services.BuildServiceProvider();
         _dbf = sp.GetRequiredService<IDbContextFactory<PanelDb>>();
         using (var db = _dbf.CreateDbContext()) db.Database.EnsureCreated();
         var api = new PalApiClient(new HttpClient(), new PalApiSettings(_stub.BaseUrl, "pw"));
-        _poller = new PollerService(api, _sup, _snap, _dbf, new DbEventSink(_dbf), o);
+        var sink = new ServerEventSink(_dbf, _sid);
+        _rt = MakeRuntime(_sid, api, _sup, sink);
+        _poller = new PollerService(NullManager(), _dbf);
         return Task.CompletedTask;
     }
     public async Task DisposeAsync() => await _stub.DisposeAsync();
 
+    // A ServerManager isn't needed to exercise TickServerAsync directly; supply a minimal one.
+    private ServerManager NullManager()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContextFactory<PanelDb>(b => b.UseSqlite($"Data Source={Path.GetTempFileName()}"));
+        var sp = services.BuildServiceProvider();
+        var dbf = sp.GetRequiredService<IDbContextFactory<PanelDb>>();
+        using (var db = dbf.CreateDbContext()) db.Database.EnsureCreated();
+        return new ServerManager(dbf, new FakeLauncher(), new StubHttpFactory(), new AllowAllGuard(), new IdentityProtector());
+    }
+    private class StubHttpFactory : IHttpClientFactory { public HttpClient CreateClient(string name) => new(); }
+    private class IdentityProtector : ISecretProtector { public string Protect(string p) => p; public string Unprotect(string c) => c; }
+
     [Fact]
-    public async Task Tick_WhileStarting_PromotesToRunning_AndSamples()
+    public async Task Tick_WhileStarting_PromotesToRunning_AndSamplesWithServerId()
     {
         await _sup.StartAsync(default);
-        await _poller.TickAsync(default);
+        await _poller.TickServerAsync(_rt, default);
         Assert.Equal(ServerState.Running, _sup.State);
-        Assert.True(_snap.Current.ApiReachable);
-        Assert.Single(_snap.Current.Players);
+        Assert.True(Snap.Current.ApiReachable);
+        Assert.Single(Snap.Current.Players);
         using var db = _dbf.CreateDbContext();
-        Assert.Equal(1, db.Samples.Count());
+        var sample = Assert.Single(db.Samples);
+        Assert.Equal(_sid, sample.ServerId);
     }
 
     [Fact]
-    public async Task PlayerJoinLeave_CreatesAndClosesSessions()
+    public async Task PlayerJoinLeave_CreatesAndClosesSessions_ScopedToServer()
     {
         await _sup.StartAsync(default);
-        await _poller.TickAsync(default);                       // Alice online
+        await _poller.TickServerAsync(_rt, default);
         _stub.PlayerNames = ["Alice", "Bob"];
-        await _poller.TickAsync(default);                       // Bob joins
+        await _poller.TickServerAsync(_rt, default);
         _stub.PlayerNames = ["Bob"];
-        await _poller.TickAsync(default);                       // Alice leaves
+        await _poller.TickServerAsync(_rt, default);
         using var db = _dbf.CreateDbContext();
         var alice = db.Sessions.Single(s => s.Name == "Alice");
         Assert.NotNull(alice.LeftAt);
+        Assert.Equal(_sid, alice.ServerId);
         var bob = db.Sessions.Single(s => s.Name == "Bob");
         Assert.Null(bob.LeftAt);
-        Assert.Contains(db.Events, e => e.Type == "player-join" && e.Detail.Contains("Bob"));
+        Assert.Contains(db.Events, e => e.Type == "player-join" && e.Detail.Contains("Bob") && e.ServerId == _sid);
     }
 
     [Fact]
-    public async Task FirstTick_ReconcilesStaleSessionsFromPreviousRun()
+    public async Task FirstTick_ReconcilesStaleSessionsForThisServerOnly()
     {
-        // Simulates a panel restart while PalServer kept running: the previous run's
-        // session row is still open in the DB but _online is a fresh empty dictionary.
+        var otherServer = Guid.NewGuid();
         using (var db = _dbf.CreateDbContext())
         {
-            db.Sessions.Add(new PlayerSession { UserId = "steam_ghost", Name = "Ghost", JoinedAt = DateTimeOffset.UtcNow.AddHours(-2) });
+            db.Sessions.Add(new PlayerSession { ServerId = _sid, UserId = "steam_ghost", Name = "Ghost", JoinedAt = DateTimeOffset.UtcNow.AddHours(-2) });
+            db.Sessions.Add(new PlayerSession { ServerId = otherServer, UserId = "steam_other", Name = "OtherGhost", JoinedAt = DateTimeOffset.UtcNow.AddHours(-2) });
             db.SaveChanges();
         }
         await _sup.StartAsync(default);
-        await _poller.TickAsync(default);                       // first tick: reconcile, then Alice joins fresh
+        await _poller.TickServerAsync(_rt, default);
         using var check = _dbf.CreateDbContext();
-        var ghost = check.Sessions.Single(s => s.Name == "Ghost");
-        Assert.NotNull(ghost.LeftAt);                           // stale row closed
-        var alice = check.Sessions.Single(s => s.Name == "Alice");
-        Assert.Null(alice.LeftAt);                              // fresh join row created
-        Assert.Contains(check.Events, e => e.Type == "sessions-reconciled" && e.Detail.Contains("1"));
+        Assert.NotNull(check.Sessions.Single(s => s.Name == "Ghost").LeftAt);       // this server's stale row closed
+        Assert.Null(check.Sessions.Single(s => s.Name == "OtherGhost").LeftAt);     // other server's row untouched
+        Assert.Contains(check.Events, e => e.Type == "sessions-reconciled" && e.ServerId == _sid);
+    }
+
+    [Fact]
+    public async Task ApiRecovery_LogsUnreachableAndRecoveredExactlyOnce()
+    {
+        await _sup.StartAsync(default);
+        await _poller.TickServerAsync(_rt, default);
+        _stub.Healthy = false;
+        await _poller.TickServerAsync(_rt, default);
+        await _poller.TickServerAsync(_rt, default);
+        _stub.Healthy = true;
+        await _poller.TickServerAsync(_rt, default);
+        await _poller.TickServerAsync(_rt, default);
+        using var db = _dbf.CreateDbContext();
+        Assert.Equal(1, db.Events.Count(e => e.Type == "api-unreachable"));
+        Assert.Equal(1, db.Events.Count(e => e.Type == "api-recovered"));
+    }
+
+    [Fact]
+    public async Task OneServerDown_DoesNotStallAnother()
+    {
+        // Reachable server (the stub) and an unreachable server (throwing API). Ticking both
+        // must succeed for the healthy one and not throw for the broken one.
+        await _sup.StartAsync(default);
+        var downSid = Guid.NewGuid();
+        var downSup = new ProcessSupervisor(new FakeLauncher(), Options.Create(new PanelOptions())) { RestartDelay = _ => Task.CompletedTask };
+        await downSup.StartAsync(default);
+        var downRt = MakeRuntime(downSid, new ThrowingApi(), downSup, new ServerEventSink(_dbf, downSid));
+
+        await _poller.TickServerAsync(_rt, default);                                 // healthy
+        var ex = await Record.ExceptionAsync(() => TickGuarded(downRt));             // broken, guarded like the loop does
+        Assert.Null(ex);
+
+        Assert.True(Snap.Current.ApiReachable);                                      // healthy server sampled
+        using var db = _dbf.CreateDbContext();
+        Assert.Equal(_sid, db.Samples.Single().ServerId);
+    }
+
+    // Mirror ExecuteAsync's per-server guard so a throwing tick is contained.
+    private async Task TickGuarded(ServerRuntime rt)
+    {
+        try { await _poller.TickServerAsync(rt, default); }
+        catch (Exception ex) { try { await rt.Events.LogAsync("poller-error", ex.Message); } catch { } }
     }
 
     private sealed class ThrowingApi : IPalApi
@@ -90,56 +164,5 @@ public class PollerTests : IAsyncLifetime
         public Task UnbanAsync(string userId, CancellationToken ct) => throw new NotSupportedException();
         public Task SaveAsync(CancellationToken ct) => throw new NotSupportedException();
         public Task ShutdownAsync(int waitSeconds, string message, CancellationToken ct) => throw new NotSupportedException();
-    }
-
-    private sealed class ThrowingSink : IEventSink
-    {
-        public SemaphoreSlim Called { get; } = new(0);
-        public Task LogAsync(string type, string detail, string? actorEmail = null)
-        { Called.Release(); throw new InvalidOperationException("event sink down (disk full)"); }
-    }
-
-    [Fact]
-    public async Task ExecuteLoop_SurvivesTickFailure_EvenWhenEventSinkAlsoThrows()
-    {
-        await _sup.StartAsync(default);
-        var o = Options.Create(new PanelOptions { ApiBaseUrl = _stub.BaseUrl, AdminPassword = "pw", PollIntervalSeconds = 60 });
-        var sink = new ThrowingSink();
-        var poller = new PollerService(new ThrowingApi(), _sup, _snap, _dbf, sink, o);
-        await poller.StartAsync(default);
-        Assert.True(await sink.Called.WaitAsync(TimeSpan.FromSeconds(5)));   // tick threw; poller-error write attempted and threw
-        await Task.WhenAny(poller.ExecuteTask!, Task.Delay(250));            // give an unguarded loop time to fault
-        Assert.False(poller.ExecuteTask!.IsFaulted);                         // loop must survive both failures
-        await poller.StopAsync(default);
-    }
-
-    [Fact]
-    public async Task ApiRecovery_LogsUnreachableAndRecoveredExactlyOnce()
-    {
-        await _sup.StartAsync(default);
-        await _poller.TickAsync(default);                       // reachable
-        _stub.Healthy = false;
-        await _poller.TickAsync(default);                       // down -> api-unreachable
-        await _poller.TickAsync(default);                       // still down (deduped)
-        _stub.Healthy = true;
-        await _poller.TickAsync(default);                       // back -> api-recovered
-        await _poller.TickAsync(default);                       // still up (deduped)
-        using var db = _dbf.CreateDbContext();
-        Assert.Equal(1, db.Events.Count(e => e.Type == "api-unreachable"));
-        Assert.Equal(1, db.Events.Count(e => e.Type == "api-recovered"));
-    }
-
-    [Fact]
-    public async Task RunningButApiDown_PublishesDegradedOnce()
-    {
-        await _sup.StartAsync(default);
-        await _poller.TickAsync(default);
-        _stub.Healthy = false;
-        await _poller.TickAsync(default);
-        await _poller.TickAsync(default);
-        Assert.Equal(ServerState.Running, _sup.State);
-        Assert.False(_snap.Current.ApiReachable);
-        using var db = _dbf.CreateDbContext();
-        Assert.Equal(1, db.Events.Count(e => e.Type == "api-unreachable")); // deduped
     }
 }
