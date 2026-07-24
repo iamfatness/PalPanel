@@ -1,17 +1,4 @@
-/* PalPanel — dark theme, no framework */
-
-:root {
-    --bg: #14161a;
-    --bg-panel: #1c1f26;
-    --bg-panel-2: #23262f;
-    --border: #2e323c;
-    --text: #e6e8eb;
-    --text-dim: #9aa0aa;
-    --accent: #4f8cff;
-    --ok: #2fbf71;
-    --warn: #e0a52c;
-    --bad: #e0503c;
-}
+/* PalPanel — component styles. Design tokens live in tokens.css (loaded first). */
 
 * { box-sizing: border-box; }
 
@@ -449,7 +436,173 @@ select {
         border-bottom: 1px solid var(--border);
     }
 
-    .charts {
+    .charts,
+    .fleet-grid {
         grid-template-columns: 1fr;
     }
 }
+
+/* ============================================================
+   Design-system additions (multi-server fleet, forms, states)
+   ============================================================ */
+
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.danger,
+.button.danger {
+    background: var(--bad-wash);
+    border-color: var(--bad);
+    color: var(--bad);
+}
+button.danger:hover:not(:disabled) { background: var(--bad); color: #fff; }
+
+/* Link styled as a button (Fleet "Add server", ServerSettings edit link) */
+.button {
+    display: inline-block;
+    background: var(--bg-panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.9rem;
+    text-decoration: none;
+    cursor: pointer;
+    line-height: 1.2;
+}
+.button:hover { border-color: var(--accent); }
+.button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+/* Fleet header + grid */
+.fleet-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    margin-bottom: var(--space-4);
+}
+
+.fleet-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--space-4);
+}
+
+.fleet-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--text-faint);
+    border-radius: var(--radius);
+    padding: var(--space-4);
+    box-shadow: var(--shadow);
+    transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.fleet-card:hover { transform: translateY(-2px); border-left-color: var(--accent); }
+.fleet-card.ok { border-left-color: var(--ok); }
+.fleet-card.warn { border-left-color: var(--warn); }
+.fleet-card.bad { border-left-color: var(--bad); }
+
+.fleet-card-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    text-decoration: none;
+    color: var(--text);
+}
+.fleet-card-title h2 { margin: 0; font-size: var(--text-lg); }
+
+.state-badge {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: var(--bg-panel-2);
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+.fleet-card.ok .state-badge { background: var(--ok-wash); color: var(--ok); }
+.fleet-card.warn .state-badge { background: var(--warn-wash); color: var(--warn); }
+.fleet-card.bad .state-badge { background: var(--bad-wash); color: var(--bad); }
+
+.fleet-card-metrics {
+    display: flex;
+    gap: var(--space-4);
+    margin: var(--space-4) 0;
+}
+.fleet-card-metrics .metric { display: flex; flex-direction: column; }
+.fleet-card-metrics .metric-value { font-size: var(--text-lg); font-weight: 700; }
+.fleet-card-metrics .metric-label { font-size: var(--text-xs); color: var(--text-dim); }
+
+.fleet-card-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-3);
+}
+.fleet-card-actions a { margin-left: auto; font-size: var(--text-sm); }
+
+/* Empty state */
+.empty-state {
+    background: var(--bg-panel);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    padding: var(--space-6);
+    text-align: center;
+    color: var(--text-dim);
+}
+.empty-state .button { margin-top: var(--space-3); }
+
+/* Server add/edit form */
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--space-4);
+    margin-bottom: var(--space-5);
+}
+.form-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-dim);
+}
+.form-grid label.checkbox {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text);
+}
+.form-grid input { min-width: 0; width: 100%; }
+.form-grid label.checkbox input { width: auto; }
+
+/* Nav: server context + switcher */
+.nav-section {
+    margin-top: var(--space-3);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border);
+}
+.nav-server-name {
+    display: block;
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-faint);
+    padding: 0 0.75rem 0.25rem;
+}
+.nav-switcher {
+    width: 100%;
+    margin-bottom: var(--space-2);
+}
+
+/* Theme toggle in the footer */
+.theme-toggle {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.25rem 0.6rem;
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+}
+.theme-toggle:hover { border-color: var(--accent); }

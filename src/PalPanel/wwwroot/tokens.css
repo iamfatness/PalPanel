@@ -1,0 +1,99 @@
+/* PalPanel design tokens — dark-first, light-aware.
+   Loaded before app.css so every rule can consume these custom properties. The viewer's
+   preference is honored via prefers-color-scheme; an explicit choice stamps [data-theme] on
+   <html> (see MainLayout theme toggle) and always wins over the media query. */
+
+:root {
+    /* Surface ramp (dark default) */
+    --bg: #14161a;
+    --bg-panel: #1c1f26;
+    --bg-panel-2: #23262f;
+    --bg-panel-3: #2b2f39;
+    --border: #2e323c;
+    --border-strong: #3c414d;
+
+    /* Text tiers */
+    --text: #e6e8eb;
+    --text-dim: #9aa0aa;
+    --text-faint: #6b7280;
+
+    /* Brand + semantic status (shared by cards, badges, charts) */
+    --accent: #5b93ff;
+    --accent-ink: #ffffff;
+    --ok: #2fbf71;
+    --warn: #e0a52c;
+    --bad: #e0503c;
+
+    /* Translucent status washes for card edges/badges */
+    --ok-wash: rgba(47, 191, 113, 0.14);
+    --warn-wash: rgba(224, 165, 44, 0.14);
+    --bad-wash: rgba(224, 80, 60, 0.14);
+
+    /* Spacing scale */
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.5rem;
+    --space-6: 2rem;
+
+    /* Type scale */
+    --text-xs: 0.78rem;
+    --text-sm: 0.875rem;
+    --text-md: 1rem;
+    --text-lg: 1.25rem;
+    --text-xl: 1.6rem;
+    --text-2xl: 2.1rem;
+
+    /* Radii + elevation */
+    --radius-sm: 6px;
+    --radius: 8px;
+    --radius-lg: 12px;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+/* Light theme: apply when the viewer prefers light AND hasn't forced dark. */
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+        --bg: #f4f6f9;
+        --bg-panel: #ffffff;
+        --bg-panel-2: #eef1f5;
+        --bg-panel-3: #e4e8ee;
+        --border: #d7dce3;
+        --border-strong: #c2c9d3;
+        --text: #1a1c22;
+        --text-dim: #5b636f;
+        --text-faint: #8a919c;
+        --accent: #2563eb;
+        --accent-ink: #ffffff;
+        --ok: #17915a;
+        --warn: #b7791f;
+        --bad: #c53a28;
+        --ok-wash: rgba(23, 145, 90, 0.12);
+        --warn-wash: rgba(183, 121, 31, 0.12);
+        --bad-wash: rgba(197, 58, 40, 0.12);
+        --shadow: 0 1px 2px rgba(16, 24, 40, 0.08), 0 6px 18px rgba(16, 24, 40, 0.08);
+    }
+}
+
+/* Explicit light choice (toggle) wins regardless of OS preference. */
+:root[data-theme="light"] {
+    --bg: #f4f6f9;
+    --bg-panel: #ffffff;
+    --bg-panel-2: #eef1f5;
+    --bg-panel-3: #e4e8ee;
+    --border: #d7dce3;
+    --border-strong: #c2c9d3;
+    --text: #1a1c22;
+    --text-dim: #5b636f;
+    --text-faint: #8a919c;
+    --accent: #2563eb;
+    --accent-ink: #ffffff;
+    --ok: #17915a;
+    --warn: #b7791f;
+    --bad: #c53a28;
+    --ok-wash: rgba(23, 145, 90, 0.12);
+    --warn-wash: rgba(183, 121, 31, 0.12);
+    --bad-wash: rgba(197, 58, 40, 0.12);
+    --shadow: 0 1px 2px rgba(16, 24, 40, 0.08), 0 6px 18px rgba(16, 24, 40, 0.08);
+}

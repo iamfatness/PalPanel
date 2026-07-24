@@ -16,6 +16,9 @@
                 <footer class="footer">
                     <span>@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value)</span>
                     <span class="role">@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value)</span>
+                    @* Plain HTML onclick (not @@onclick): works without an interactive circuit,
+                       just flips the data-theme attribute via the inline script in App.razor. *@
+                    <button type="button" class="theme-toggle" onclick="palTheme.toggle()" title="Toggle light/dark">◐ Theme</button>
                     <form method="post" action="/auth/logout" class="logout-form">
                         <AntiforgeryToken />
                         <button type="submit" class="logout-button">Logout</button>

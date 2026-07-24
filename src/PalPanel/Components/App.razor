@@ -5,8 +5,30 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
+    <link rel="stylesheet" href="tokens.css" />
     <link rel="stylesheet" href="app.css" />
     <link rel="stylesheet" href="PalPanel.styles.css" />
+    <script>
+        // Apply the persisted theme choice before first paint to avoid a flash. An absent
+        // choice leaves prefers-color-scheme in control (no data-theme attribute).
+        (function () {
+            try {
+                var t = localStorage.getItem('palpanel-theme');
+                if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+            } catch (e) { /* storage blocked; fall back to OS preference */ }
+        })();
+        window.palTheme = {
+            toggle: function () {
+                var cur = document.documentElement.getAttribute('data-theme');
+                // Resolve the effective theme first so the first toggle always flips visibly.
+                if (!cur) cur = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                var next = cur === 'dark' ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                try { localStorage.setItem('palpanel-theme', next); } catch (e) { }
+                return next;
+            }
+        };
+    </script>
     <HeadOutlet />
 </head>
 
