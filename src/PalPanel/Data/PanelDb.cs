@@ -30,12 +30,25 @@ public interface IEventSink
     Task LogAsync(string type, string detail, string? actorEmail = null);
 }
 
+// Panel-level (not server-scoped) events; ServerId stays Guid.Empty.
 public class DbEventSink(IDbContextFactory<PanelDb> factory) : IEventSink
 {
     public async Task LogAsync(string type, string detail, string? actorEmail = null)
     {
         await using var db = await factory.CreateDbContextAsync();
         db.Events.Add(new EventLog { Ts = DateTimeOffset.UtcNow, Type = type, Detail = detail, ActorEmail = actorEmail });
+        await db.SaveChangesAsync();
+    }
+}
+
+// Server-scoped events: every row is stamped with the owning server's id so History can be
+// filtered per server. One instance per ServerRuntime.
+public class ServerEventSink(IDbContextFactory<PanelDb> factory, Guid serverId) : IEventSink
+{
+    public async Task LogAsync(string type, string detail, string? actorEmail = null)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        db.Events.Add(new EventLog { ServerId = serverId, Ts = DateTimeOffset.UtcNow, Type = type, Detail = detail, ActorEmail = actorEmail });
         await db.SaveChangesAsync();
     }
 }
