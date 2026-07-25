@@ -140,7 +140,7 @@ else
                     <div class="metric"><div class="mk">Uptime</div><div class="mv @(s.State == ServerState.Running ? "" : "dim")">@Uptime(s)</div></div>
                     <div class="metric"><div class="mk">FPS</div><div class="mv @(s.ApiReachable ? "" : "dim")">@(s.Metrics is { } m ? m.ServerFps.ToString("0.0") : "—")</div></div>
                     <div class="metric"><div class="mk">Mem</div><div class="mv @(s.MemoryBytes > 0 ? "" : "dim")">@MemLabel(s.MemoryBytes)</div></div>
-                    <div class="metric"><div class="mk">Ping</div><div class="mv @(AvgPing(s) is not null ? "" : "dim")">@(AvgPing(s) is { } p ? $"{p}ms" : "—")</div></div>
+                    <div class="metric"><div class="mk">CPU</div><div class="mv @(s.State == ServerState.Running ? "" : "dim")">@(s.State == ServerState.Running ? $"{s.CpuPercent:0}%" : "—")</div></div>
                 </div>
 
                 <AuthorizeView Roles="Admin"><Authorized>
@@ -272,7 +272,6 @@ else
     private static string StateLabel(ServerSnapshot s) =>
         s.State == ServerState.Running && !s.ApiReachable ? "API unreachable" : s.State.ToString();
     private static string MemLabel(long bytes) => bytes <= 0 ? "—" : $"{bytes / 1_073_741_824.0:0.0} GB";
-    private static int? AvgPing(ServerSnapshot s) => s.Players.Count == 0 ? null : (int)Math.Round(s.Players.Average(p => p.Ping));
     private static string PortLabel(ServerRuntime rt)
     {
         var u = rt.Config.ApiBaseUrl;

@@ -30,6 +30,15 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
         }
         return CurrentMemoryBytes;
     }
+
+    // Cumulative CPU time of the real game server process(es); the poller diffs it across polls
+    // to compute a CPU %. Zero when not running.
+    public TimeSpan GameCpuTime(string gameProcessName)
+    {
+        if (State is ServerState.Stopped or ServerState.Held || string.IsNullOrWhiteSpace(gameProcessName))
+            return TimeSpan.Zero;
+        return launcher.GetCpuTimeByName(gameProcessName);
+    }
     public event Action<ServerState>? StateChanged;
     public Func<string, string, Task>? OnEvent { get; set; }
     // injectable for tests; real delay is exponential backoff capped at 60 s

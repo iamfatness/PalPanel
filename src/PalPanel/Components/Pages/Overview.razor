@@ -52,6 +52,13 @@ else
     }
 </AuthorizeView>
 
+<div class="stats-row">
+    <div class="stat-card"><div class="stat-label">FPS</div><div class="stat-value">@(_s.Metrics is { } m ? m.ServerFps.ToString("0.0") : "—")</div></div>
+    <div class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">@(_s.State == ServerState.Running ? $"{_s.CpuPercent:0}%" : "—")</div></div>
+    <div class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">@(_s.MemoryBytes > 0 ? $"{_s.MemoryBytes / 1_073_741_824.0:0.0} GB" : "—")</div></div>
+    <div class="stat-card"><div class="stat-label">Frame time</div><div class="stat-value">@(_s.Metrics is { } ft ? $"{ft.ServerFrameTime:0.0} ms" : "—")</div></div>
+</div>
+
 <div class="charts">
     <div class="chart"><h3>Players (24 h)</h3><canvas id="playersChart"></canvas></div>
     <div class="chart"><h3>Memory (24 h)</h3><canvas id="memChart"></canvas></div>

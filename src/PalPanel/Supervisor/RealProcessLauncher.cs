@@ -30,6 +30,18 @@ public class RealProcessLauncher : IProcessLauncher
         return total;
     }
 
+    public TimeSpan GetCpuTimeByName(string processName)
+    {
+        var total = TimeSpan.Zero;
+        foreach (var p in Process.GetProcessesByName(processName))
+        {
+            try { total += p.TotalProcessorTime; }
+            catch { /* protected/exited process — skip */ }
+            finally { p.Dispose(); }
+        }
+        return total;
+    }
+
     private sealed class RealServerProcess(Process p) : IServerProcess
     {
         public int Pid => p.Id;

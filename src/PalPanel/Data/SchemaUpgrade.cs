@@ -17,6 +17,9 @@ public static class SchemaUpgrade
         ("Sessions", "ServerId", "TEXT", "'00000000-0000-0000-0000-000000000000'"),
         ("Events", "ServerId", "TEXT", "'00000000-0000-0000-0000-000000000000'"),
         ("Schedules", "ServerId", "TEXT", "'00000000-0000-0000-0000-000000000000'"),
+        // CPU metrics added later; default 0 for existing rows.
+        ("Samples", "Cpu", "REAL", "0"),
+        ("SampleRollups", "AvgCpu", "REAL", "0"),
     };
 
     public static async Task ApplyAsync(PanelDb db, CancellationToken ct = default)

@@ -20,6 +20,8 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
         public bool ApiWasReachable = true;
         public int ConsecutiveApiFailures;
         public bool Reconciled;
+        public TimeSpan? PrevCpu;          // last observed cumulative CPU time
+        public DateTimeOffset PrevCpuAt;   // when it was observed (for the wall-clock delta)
     }
 
     // A single failed poll (a transient Palworld API stall) is tolerated; the UI is only marked
@@ -64,6 +66,7 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
         var state = sup.State;
         if (state is ServerState.Stopped or ServerState.Held or ServerState.Stopping)
         {
+            st.PrevCpu = null; // reset the CPU baseline so a fresh run starts clean
             rt.Snapshot.Publish(new ServerSnapshot(state, false, null, [], null, 0, null, DateTimeOffset.UtcNow));
             await CloseAllSessionsAsync(rt, st);
             return;
@@ -89,8 +92,23 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
         st.ApiWasReachable = reachable;
 
         var memBytes = sup.GameMemoryBytes(GameProcessName);
+
+        // CPU %: diff the process's cumulative CPU time against the previous poll, normalized by
+        // elapsed wall time and core count → 0-100% of the whole machine. First poll of a run has
+        // no baseline, so it reports 0 until the next tick.
+        var cpuNow = sup.GameCpuTime(GameProcessName);
+        var wallNow = DateTimeOffset.UtcNow;
+        double cpuPct = 0;
+        if (st.PrevCpu is { } prev)
+        {
+            var wallMs = (wallNow - st.PrevCpuAt).TotalMilliseconds;
+            if (wallMs > 0)
+                cpuPct = Math.Clamp((cpuNow - prev).TotalMilliseconds / (wallMs * Environment.ProcessorCount) * 100.0, 0, 100);
+        }
+        st.PrevCpu = cpuNow; st.PrevCpuAt = wallNow;
+
         rt.Snapshot.Publish(new ServerSnapshot(state, reachable, info, players, metrics,
-            memBytes, sup.RunningSince, DateTimeOffset.UtcNow));
+            memBytes, sup.RunningSince, DateTimeOffset.UtcNow) { CpuPercent = cpuPct });
 
         if (state == ServerState.Running && rawReachable)
         {
@@ -99,7 +117,7 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
             {
                 ServerId = rt.Id, Ts = DateTimeOffset.UtcNow, Players = players.Count,
                 Fps = metrics?.ServerFps ?? 0, FrameTimeMs = metrics?.ServerFrameTime ?? 0,
-                MemoryBytes = memBytes, UptimeSeconds = metrics?.Uptime ?? 0
+                MemoryBytes = memBytes, Cpu = cpuPct, UptimeSeconds = metrics?.Uptime ?? 0
             });
             await db.SaveChangesAsync(ct);
             await DiffSessionsAsync(rt, st, players);

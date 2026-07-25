@@ -28,6 +28,8 @@ public class FakeLauncher : IProcessLauncher
     public IServerProcess Launch(string exe, string args, string wd)
     { var p = new FakeProcess(); Launched.Add(p); OnLaunch?.Invoke(Launched.Count); return p; }
     public long GetWorkingSetByName(string name) => WorkingSetByName;
+    public TimeSpan CpuTime { get; set; }
+    public TimeSpan GetCpuTimeByName(string name) => CpuTime;
 }
 
 public class ThrowingLauncher : IProcessLauncher
@@ -36,6 +38,7 @@ public class ThrowingLauncher : IProcessLauncher
     public IServerProcess Launch(string exe, string args, string wd)
         => throw new InvalidOperationException("exe not found");
     public long GetWorkingSetByName(string name) => 0;
+    public TimeSpan GetCpuTimeByName(string name) => TimeSpan.Zero;
 }
 
 public class FlakyLauncher : IProcessLauncher
@@ -48,6 +51,7 @@ public class FlakyLauncher : IProcessLauncher
         var p = new FakeProcess(); Launched.Add(p); return p;
     }
     public long GetWorkingSetByName(string name) => 0;
+    public TimeSpan GetCpuTimeByName(string name) => TimeSpan.Zero;
 }
 
 public class BlockingLauncher : IProcessLauncher
@@ -63,4 +67,5 @@ public class BlockingLauncher : IProcessLauncher
         var p = new FakeProcess(); Launched.Add(p); return p;
     }
     public long GetWorkingSetByName(string name) => 0;
+    public TimeSpan GetCpuTimeByName(string name) => TimeSpan.Zero;
 }

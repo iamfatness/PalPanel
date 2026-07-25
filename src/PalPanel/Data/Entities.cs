@@ -33,6 +33,7 @@ public class Sample
     public double Fps { get; set; }
     public double FrameTimeMs { get; set; }
     public long MemoryBytes { get; set; }
+    public double Cpu { get; set; }        // server-process CPU %, 0-100 across all cores
     public int UptimeSeconds { get; set; }
 }
 
@@ -46,6 +47,7 @@ public class SampleRollup
     public int MaxPlayers { get; set; }
     public double AvgFps { get; set; }
     public long AvgMemoryBytes { get; set; }
+    public double AvgCpu { get; set; }
 }
 
 public class PlayerSession
