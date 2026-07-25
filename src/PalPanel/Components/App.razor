@@ -8,9 +8,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="tokens.css" />
-    <link rel="stylesheet" href="app.css" />
-    <link rel="stylesheet" href="PalPanel.styles.css" />
+    @* AssetVer is bumped on every stylesheet change so a new deploy busts the Cloudflare edge
+       cache (proxied hostname caches .css); without it the edge serves stale CSS after a deploy. *@
+    <link rel="stylesheet" href="tokens.css?v=@AssetVer" />
+    <link rel="stylesheet" href="app.css?v=@AssetVer" />
+    <link rel="stylesheet" href="PalPanel.styles.css?v=@AssetVer" />
     <script>
         // Apply the persisted theme choice before first paint to avoid a flash. An absent
         // choice leaves prefers-color-scheme in control (no data-theme attribute).
@@ -53,7 +55,13 @@
         });
     </script>
     <script src="lib/chart.umd.js"></script>
-    <script src="js/charts.js"></script>
+    <script src="js/charts.js?v=@AssetVer"></script>
 </body>
 
 </html>
+
+@code {
+    // Bump this whenever app.css / tokens.css / charts.js change, so a deploy invalidates the
+    // Cloudflare edge cache for the new asset URLs. (Purge is the fallback; this is the guard.)
+    private const string AssetVer = "nightops-1";
+}
