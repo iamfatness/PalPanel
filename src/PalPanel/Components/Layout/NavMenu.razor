@@ -40,6 +40,12 @@
             </NavLink>
         </li>
         <li>
+            <NavLink href="@($"/s/{_currentServer.Id}/messages")">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M20 12a7.5 7.5 0 01-10.9 6.7L4 20l1.3-4.6A7.5 7.5 0 1120 12z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+                Messages
+            </NavLink>
+        </li>
+        <li>
             <NavLink href="@($"/s/{_currentServer.Id}/history")">
                 <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
                 History

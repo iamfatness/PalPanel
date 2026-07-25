@@ -52,8 +52,15 @@ public class PalApiClient : IPalApi
         return d is null ? null : new(d.ServerFps, d.CurrentPlayerNum, d.ServerFrameTime, d.MaxPlayerNum, d.Uptime);
     }
 
-    private Task Post(string path, object? body, CancellationToken ct) =>
-        _http.PostAsync(path, body is null ? null : JsonContent.Create(body), ct);
+    private async Task Post(string path, object? body, CancellationToken ct)
+    {
+        // Verify the server actually accepted the action so callers can honestly confirm success
+        // (announce, save, kick, ...) instead of fire-and-forget. All callers already surface or
+        // log exceptions, so a rejected action is reported, never silently "sent".
+        var resp = await _http.PostAsync(path, body is null ? null : JsonContent.Create(body), ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new InvalidOperationException($"The server rejected '{path}' ({(int)resp.StatusCode} {resp.ReasonPhrase}).");
+    }
 
     public Task AnnounceAsync(string message, CancellationToken ct) => Post("announce", new { message }, ct);
     public Task KickAsync(string userId, string message, CancellationToken ct) => Post("kick", new { userid = userId, message }, ct);

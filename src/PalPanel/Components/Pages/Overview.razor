@@ -35,18 +35,21 @@ else
 
 <AuthorizeView Roles="Admin">
     <div class="actions">
-        @if (_error is not null)
-        {
-            <div class="alert">@_error</div>
-        }
         <button disabled="@(!CanStart)" @onclick="() => Do(ct => Orch.StartAsync(_email, ct))">Start</button>
         <button disabled="@(!CanStop)" @onclick="ConfirmStop">Stop</button>
         <button disabled="@(!CanStop)" @onclick="ConfirmRestart">Restart</button>
         <button disabled="@(!CanStop)" @onclick="() => Do(ct => Orch.SaveAsync(_email, ct))">Save world</button>
         <input @bind="_announceText" @bind:event="oninput" placeholder="Announce message..." />
-        <button disabled="@(!CanStop || string.IsNullOrWhiteSpace(_announceText))"
-                @onclick="() => Do(ct => Orch.AnnounceAsync(_email, _announceText, ct))">Announce</button>
+        <button disabled="@(!CanStop || string.IsNullOrWhiteSpace(_announceText))" @onclick="AnnounceAsync">Announce</button>
     </div>
+    @if (_notice is not null)
+    {
+        <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_notice</div>
+    }
+    @if (_error is not null)
+    {
+        <div class="alert">@_error</div>
+    }
 </AuthorizeView>
 
 <div class="charts">
@@ -67,6 +70,7 @@ else
     private ConfirmDialog _confirm = null!;
     private bool _busy;
     private string? _error;
+    private string? _notice;
     private DateTimeOffset _lastChartRefresh = DateTimeOffset.MinValue;
 
     private IServerOrchestrator Orch => _rt!.Orchestrator;
@@ -159,8 +163,24 @@ else
         // being down, the REST API unreachable, ...) must surface inline to the operator, not
         // propagate as an unhandled exception that kills the Blazor circuit and leaves a dead
         // button with no visible cause.
-        _busy = true; _error = null;
+        _busy = true; _error = null; _notice = null;
         try { await action(CancellationToken.None); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task AnnounceAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_announceText)) return;
+        var message = _announceText.Trim();
+        // AnnounceAsync throws if the server rejects it, so a clean return means it was sent.
+        _busy = true; _error = null; _notice = null;
+        try
+        {
+            await Orch.AnnounceAsync(_email, message, CancellationToken.None);
+            _notice = "Announcement sent to the server.";
+            _announceText = "";
+        }
         catch (Exception ex) { _error = ex.Message; }
         finally { _busy = false; }
     }

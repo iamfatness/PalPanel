@@ -44,4 +44,13 @@ public class PalApiClientTests : IAsyncLifetime
         Assert.Null(await _client.GetInfoAsync(default));
         Assert.Empty(await _client.GetPlayersAsync(default));
     }
+
+    [Fact]
+    public async Task Announce_ThrowsWhenServerRejects_SoSuccessIsTrustworthy()
+    {
+        // A rejected broadcast must surface as a failure, not a silent "sent" — this backs the
+        // send-confirmation on the Messages/Overview screens.
+        _stub.Healthy = false; // stub replies 503 to everything
+        await Assert.ThrowsAnyAsync<Exception>(() => _client.AnnounceAsync("hello", default));
+    }
 }
