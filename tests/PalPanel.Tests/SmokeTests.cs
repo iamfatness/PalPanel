@@ -97,7 +97,7 @@ public class SmokeTests(WebApplicationFactory<Program> factory) : IClassFixture<
         var html = await client.GetStringAsync("/");
         Assert.Contains("dev@localhost", html);
         Assert.Contains("action=\"/auth/logout\"", html);
-        Assert.Contains("Logout", html);
+        Assert.Contains("Sign out", html);
         Assert.Contains("__RequestVerificationToken", html); // antiforgery token rendered in the logout form
     }
 

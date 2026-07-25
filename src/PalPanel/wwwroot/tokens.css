@@ -1,99 +1,93 @@
-/* PalPanel design tokens — dark-first, light-aware.
-   Loaded before app.css so every rule can consume these custom properties. The viewer's
-   preference is honored via prefers-color-scheme; an explicit choice stamps [data-theme] on
-   <html> (see MainLayout theme toggle) and always wins over the media query. */
+/* PalPanel design tokens - "Night Ops" server-ops console.
+   Dark-committed identity with a considered light theme. New semantic names plus aliases for
+   the legacy token names (--bg-panel, --border, --text, --accent, --ok, --bad) so existing
+   component styles inherit the new palette without markup changes. Loaded before app.css. */
 
 :root {
-    /* Surface ramp (dark default) */
-    --bg: #14161a;
-    --bg-panel: #1c1f26;
-    --bg-panel-2: #23262f;
-    --bg-panel-3: #2b2f39;
-    --border: #2e323c;
-    --border-strong: #3c414d;
+    /* --- Surfaces (deep twilight navy; neutrals biased toward the azure accent) --- */
+    --void:#080B14;
+    --bg:#0C111F;
+    --panel:#131A2C;
+    --panel-2:#1A2338;
+    --panel-3:#212B44;
+    --line:#26314C;
+    --line-soft:#1B2440;
 
-    /* Text tiers */
-    --text: #e6e8eb;
-    --text-dim: #9aa0aa;
-    --text-faint: #6b7280;
+    /* --- Ink --- */
+    --ink:#EAEEF9;
+    --ink-2:#9AA7C4;
+    --ink-3:#5D6A88;
 
-    /* Brand + semantic status (shared by cards, badges, charts) */
-    --accent: #5b93ff;
-    --accent-ink: #ffffff;
-    --ok: #2fbf71;
-    --warn: #e0a52c;
-    --bad: #e0503c;
+    /* --- Brand + accents --- */
+    --azure:#4DA3FF;
+    --azure-bright:#7CC0FF;
+    --violet:#8B7BFF;
+    --amber:#FFB454;
 
-    /* Translucent status washes for card edges/badges */
-    --ok-wash: rgba(47, 191, 113, 0.14);
-    --warn-wash: rgba(224, 165, 44, 0.14);
-    --bad-wash: rgba(224, 80, 60, 0.14);
+    /* --- Semantic status (separate from the accent) --- */
+    --online:#3DDC97;
+    --warn:#FBB042;
+    --down:#FB6E6E;
+    --ring-track:#20293F;
 
-    /* Spacing scale */
-    --space-1: 0.25rem;
-    --space-2: 0.5rem;
-    --space-3: 0.75rem;
-    --space-4: 1rem;
-    --space-5: 1.5rem;
-    --space-6: 2rem;
+    /* --- Legacy aliases: keep existing component CSS working on the new palette --- */
+    --bg-panel:var(--panel);
+    --bg-panel-2:var(--panel-2);
+    --bg-panel-3:var(--panel-3);
+    --border:var(--line);
+    --border-strong:var(--panel-3);
+    --text:var(--ink);
+    --text-dim:var(--ink-2);
+    --text-faint:var(--ink-3);
+    --accent:var(--azure);
+    --accent-ink:#04122b;
+    --ok:var(--online);
+    --bad:var(--down);
+    --ok-wash:color-mix(in srgb, var(--online) 15%, transparent);
+    --warn-wash:color-mix(in srgb, var(--warn) 15%, transparent);
+    --bad-wash:color-mix(in srgb, var(--down) 15%, transparent);
 
-    /* Type scale */
-    --text-xs: 0.78rem;
-    --text-sm: 0.875rem;
-    --text-md: 1rem;
-    --text-lg: 1.25rem;
-    --text-xl: 1.6rem;
-    --text-2xl: 2.1rem;
+    /* --- Type --- */
+    --display:"Space Grotesk","Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+    --sans:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"Cascadia Code","Consolas",monospace;
 
-    /* Radii + elevation */
-    --radius-sm: 6px;
-    --radius: 8px;
-    --radius-lg: 12px;
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 20px rgba(0, 0, 0, 0.25);
+    --text-xs:0.78rem;
+    --text-sm:0.875rem;
+    --text-md:1rem;
+    --text-lg:1.2rem;
+    --text-xl:1.6rem;
+    --text-2xl:2rem;
+
+    /* --- Spacing / radii / elevation --- */
+    --space-1:0.25rem; --space-2:0.5rem; --space-3:0.75rem;
+    --space-4:1rem; --space-5:1.5rem; --space-6:2rem;
+    --radius-sm:9px; --radius:12px; --radius-lg:16px;
+    --shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 12px 34px -14px rgba(0,0,0,.72);
+    --shadow-sm:0 6px 18px -10px rgba(0,0,0,.6);
 }
 
-/* Light theme: apply when the viewer prefers light AND hasn't forced dark. */
+/* Light theme: honor OS preference unless the viewer forced dark. */
 @media (prefers-color-scheme: light) {
     :root:not([data-theme="dark"]) {
-        --bg: #f4f6f9;
-        --bg-panel: #ffffff;
-        --bg-panel-2: #eef1f5;
-        --bg-panel-3: #e4e8ee;
-        --border: #d7dce3;
-        --border-strong: #c2c9d3;
-        --text: #1a1c22;
-        --text-dim: #5b636f;
-        --text-faint: #8a919c;
-        --accent: #2563eb;
-        --accent-ink: #ffffff;
-        --ok: #17915a;
-        --warn: #b7791f;
-        --bad: #c53a28;
-        --ok-wash: rgba(23, 145, 90, 0.12);
-        --warn-wash: rgba(183, 121, 31, 0.12);
-        --bad-wash: rgba(197, 58, 40, 0.12);
-        --shadow: 0 1px 2px rgba(16, 24, 40, 0.08), 0 6px 18px rgba(16, 24, 40, 0.08);
+        --void:#E6EAF2; --bg:#F3F5FA; --panel:#FFFFFF; --panel-2:#F1F4FA; --panel-3:#E7ECF5;
+        --line:#DCE2ED; --line-soft:#E8ECF4;
+        --ink:#121828; --ink-2:#54617C; --ink-3:#8A94AC;
+        --azure:#2C74E0; --azure-bright:#1D63CC; --violet:#6B5CE0; --amber:#B9781C;
+        --online:#12A063; --warn:#C0871A; --down:#D6483C; --ring-track:#E3E8F1;
+        --shadow:0 1px 2px rgba(16,24,40,.06), 0 12px 30px -16px rgba(16,24,40,.18);
+        --shadow-sm:0 4px 14px -8px rgba(16,24,40,.18);
     }
 }
 
-/* Explicit light choice (toggle) wins regardless of OS preference. */
+/* Explicit light choice wins over OS preference. */
 :root[data-theme="light"] {
-    --bg: #f4f6f9;
-    --bg-panel: #ffffff;
-    --bg-panel-2: #eef1f5;
-    --bg-panel-3: #e4e8ee;
-    --border: #d7dce3;
-    --border-strong: #c2c9d3;
-    --text: #1a1c22;
-    --text-dim: #5b636f;
-    --text-faint: #8a919c;
-    --accent: #2563eb;
-    --accent-ink: #ffffff;
-    --ok: #17915a;
-    --warn: #b7791f;
-    --bad: #c53a28;
-    --ok-wash: rgba(23, 145, 90, 0.12);
-    --warn-wash: rgba(183, 121, 31, 0.12);
-    --bad-wash: rgba(197, 58, 40, 0.12);
-    --shadow: 0 1px 2px rgba(16, 24, 40, 0.08), 0 6px 18px rgba(16, 24, 40, 0.08);
+    --void:#E6EAF2; --bg:#F3F5FA; --panel:#FFFFFF; --panel-2:#F1F4FA; --panel-3:#E7ECF5;
+    --line:#DCE2ED; --line-soft:#E8ECF4;
+    --ink:#121828; --ink-2:#54617C; --ink-3:#8A94AC;
+    --azure:#2C74E0; --azure-bright:#1D63CC; --violet:#6B5CE0; --amber:#B9781C;
+    --online:#12A063; --warn:#C0871A; --down:#D6483C; --ring-track:#E3E8F1;
+    --shadow:0 1px 2px rgba(16,24,40,.06), 0 12px 30px -16px rgba(16,24,40,.18);
+    --shadow-sm:0 4px 14px -8px rgba(16,24,40,.18);
+    --accent-ink:#ffffff;
 }

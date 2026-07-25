@@ -1,19 +1,27 @@
 @page "/"
+@using Microsoft.EntityFrameworkCore
 @using PalPanel.Control
+@using PalPanel.Data
 @using PalPanel.Monitoring
 @using PalPanel.Servers
 @using PalPanel.Supervisor
 @implements IDisposable
 @inject ServerManager Manager
+@inject IDbContextFactory<PanelDb> DbFactory
 @inject AuthenticationStateProvider AuthState
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — Fleet</PageTitle>
 
-<div class="fleet-header">
-    <h1>Fleet</h1>
+<div class="page-head">
+    <div>
+        <h1>Fleet</h1>
+        <div class="sub"><b>@OnlineCount of @_runtimes.Count</b> servers online &middot; @TotalPlayers players in-world right now</div>
+    </div>
     <AuthorizeView Roles="Admin"><Authorized>
-        <a class="button" href="/servers/new">Add server</a>
+        <a class="button primary" href="/servers/new">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Add server
+        </a>
     </Authorized></AuthorizeView>
 </div>
 
@@ -25,69 +33,221 @@
 @if (_runtimes.Count == 0)
 {
     <div class="empty-state">
-        <p>No servers yet.</p>
+        <p>No servers yet. Add one to start supervising it.</p>
         <AuthorizeView Roles="Admin"><Authorized>
-            <a class="button" href="/servers/new">Add your first server</a>
+            <a class="button primary" href="/servers/new">Add your first server</a>
         </Authorized></AuthorizeView>
     </div>
 }
 else
 {
-    <div class="fleet-grid">
+    <section class="vitals">
+        <div class="vital">
+            <div class="k"><span class="dotpulse"></span>Servers online</div>
+            <div class="v">@OnlineCount<small>/@_runtimes.Count</small></div>
+            <div class="foot">@(_runtimes.Count - OnlineCount) stopped or held</div>
+        </div>
+        <div class="vital">
+            <div class="k">
+                <svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="1.7"/><path d="M4 19c.5-2.6 2.6-4 5-4s4.5 1.4 5 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                Players in-world
+            </div>
+            <div class="v">@TotalPlayers</div>
+            <div class="foot">across running servers</div>
+        </div>
+        <div class="vital">
+            <div class="k">
+                <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="6" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M8 6V4m4 2V4m4 2V4M8 20v-2m4 2v-2m4 2v-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                Fleet memory
+            </div>
+            <div class="v">@FleetMemGb<small> GB</small></div>
+            <div class="foot">resident across the fleet</div>
+        </div>
+        <div class="vital">
+            <div class="k">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M12 4l9 16H3L12 4z" stroke="var(--warn)" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 10v4m0 3v.5" stroke="var(--warn)" stroke-width="1.8" stroke-linecap="round"/></svg>
+                Needs attention
+            </div>
+            <div class="v" style="@(AttentionCount > 0 ? "color:var(--warn)" : "")">@AttentionCount</div>
+            <div class="foot">@AttentionFoot</div>
+        </div>
+    </section>
+
+    <div class="section-rule"><h2>Servers</h2><div class="rule"></div></div>
+
+    <section class="rigs">
         @foreach (var rt in _runtimes)
         {
             var s = Snap(rt.Id);
-            <div class="fleet-card @StateCss(s.State)">
-                <a class="fleet-card-title" href="@($"/s/{rt.Id}")">
-                    <h2>@rt.Config.Name</h2>
-                    <span class="state-badge">@StateLabel(s)</span>
-                </a>
-                <div class="fleet-card-metrics">
-                    <div class="metric"><span class="metric-value">@s.Players.Count</span><span class="metric-label">/ @(s.Metrics?.MaxPlayerNum ?? 32) players</span></div>
-                    <div class="metric"><span class="metric-value">@FormatMem(s.MemoryBytes)</span><span class="metric-label">memory</span></div>
-                    <div class="metric"><span class="metric-value">@Uptime(s)</span><span class="metric-label">uptime</span></div>
-                </div>
-                <AuthorizeView Roles="Admin"><Authorized>
-                    <div class="fleet-card-actions">
-                        <button disabled="@(!CanStart(s))" @onclick="() => Do(rt, ct => rt.Orchestrator.StartAsync(_email, ct))">Start</button>
-                        <button disabled="@(!CanStop(s))" @onclick="() => Do(rt, ct => rt.Orchestrator.StopAsync(_email, ct))">Stop</button>
-                        <a href="@($"/s/{rt.Id}")">Manage →</a>
+            var st = StVar(s);
+            var max = s.Metrics?.MaxPlayerNum ?? 32;
+            var frac = max > 0 ? Math.Clamp((double)s.Players.Count / max, 0, 1) : 0;
+            var off = (226.19 * (1 - frac)).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+            <article class="rig" style="--st:@st">
+                <div class="top">
+                    <div class="ring">
+                        <svg width="84" height="84" viewBox="0 0 84 84">
+                            <circle cx="42" cy="42" r="36" fill="none" stroke="var(--ring-track)" stroke-width="7"></circle>
+                            @if (s.State == ServerState.Running)
+                            {
+                                <circle cx="42" cy="42" r="36" fill="none" stroke="var(--st)" stroke-width="7" stroke-linecap="round"
+                                        stroke-dasharray="226.19" stroke-dashoffset="@off" transform="rotate(-90 42 42)"></circle>
+                            }
+                        </svg>
+                        <div class="lbl">
+                            <b style="@(s.State == ServerState.Running ? "" : "color:var(--ink-3)")">@s.Players.Count</b>
+                            <span>/@max</span>
+                        </div>
                     </div>
-                </Authorized></AuthorizeView>
-            </div>
+                    <div class="idc">
+                        <h3>@rt.Config.Name</h3>
+                        <div class="ver">@(s.Info?.Version ?? "offline") &middot; @PortLabel(rt)</div>
+                        <span class="pill"><span class="d"></span>@StateLabel(s)</span>
+                    </div>
+                </div>
+
+                @if (s.State == ServerState.Running && !s.ApiReachable)
+                {
+                    <div class="banner">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M12 4l9 16H3L12 4z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 10v4m0 3v.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                        Process alive, but the REST API isn't answering.
+                    </div>
+                }
+                else if (s.State == ServerState.Held)
+                {
+                    <div class="banner">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M12 4l9 16H3L12 4z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 10v4m0 3v.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                        Crash loop detected — auto-restart held. Investigate, then Start.
+                    </div>
+                }
+                else
+                {
+                    <svg class="heart" viewBox="0 0 320 40" preserveAspectRatio="none">
+                        @if (Heartbeat(rt.Id) is { } path)
+                        {
+                            <path d="@path.Area" fill="@($"color-mix(in srgb, {st} 26%, transparent)")"></path>
+                            <path d="@path.Line" fill="none" stroke="var(--st)" stroke-width="1.8"></path>
+                            <circle cx="320" cy="@path.EndY" r="2.6" fill="var(--st)"></circle>
+                        }
+                        else
+                        {
+                            <path d="M0 32 L320 32" fill="none" stroke="var(--line)" stroke-width="1.6" stroke-dasharray="3 5"></path>
+                        }
+                    </svg>
+                }
+
+                <div class="metrics">
+                    <div class="metric"><div class="mk">Uptime</div><div class="mv @(s.State == ServerState.Running ? "" : "dim")">@Uptime(s)</div></div>
+                    <div class="metric"><div class="mk">FPS</div><div class="mv @(s.ApiReachable ? "" : "dim")">@(s.Metrics is { } m ? m.ServerFps.ToString("0.0") : "—")</div></div>
+                    <div class="metric"><div class="mk">Mem</div><div class="mv @(s.MemoryBytes > 0 ? "" : "dim")">@MemLabel(s.MemoryBytes)</div></div>
+                    <div class="metric"><div class="mk">Ping</div><div class="mv @(AvgPing(s) is not null ? "" : "dim")">@(AvgPing(s) is { } p ? $"{p}ms" : "—")</div></div>
+                </div>
+
+                <AuthorizeView Roles="Admin"><Authorized>
+                    <div class="rig-actions">
+                        <button class="iconbtn go" disabled="@(!CanStart(s))" title="Start" @onclick="() => Do(rt, ct => rt.Orchestrator.StartAsync(_email, ct))">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                        </button>
+                        <button class="iconbtn stop" disabled="@(!CanStop(s))" title="Stop" @onclick="() => Do(rt, ct => rt.Orchestrator.StopAsync(_email, ct))">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+                        </button>
+                        <button class="iconbtn" disabled="@(!CanStop(s))" title="Restart" @onclick="() => Do(rt, ct => rt.Orchestrator.RestartAsync(_email, [1], ct))">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M20 11a8 8 0 10-.6 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M20 5v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                        <a class="open" href="@($"/s/{rt.Id}")">Open<svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+                    </div>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="rig-actions">
+                        <a class="open" href="@($"/s/{rt.Id}")">Open<svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+                    </div>
+                </NotAuthorized>
+                </AuthorizeView>
+            </article>
         }
-    </div>
+    </section>
 }
 
 @code {
-    private IReadOnlyCollection<ServerRuntime> _runtimes = [];
+    private IReadOnlyList<ServerRuntime> _runtimes = [];
     private readonly Dictionary<Guid, ServerSnapshot> _snaps = new();
+    private readonly Dictionary<Guid, double[]> _history = new();
     private string _email = "";
     private string? _error;
 
+    private record Spark(string Line, string Area, string EndY);
+
     private ServerSnapshot Snap(Guid id) =>
         _snaps.TryGetValue(id, out var s) ? s : new ServerSnapshot(ServerState.Stopped, false, null, [], null, 0, null, DateTimeOffset.UtcNow);
+
+    private int OnlineCount => _snaps.Values.Count(s => s.State == ServerState.Running);
+    private int TotalPlayers => _snaps.Values.Where(s => s.State == ServerState.Running).Sum(s => s.Players.Count);
+    private string FleetMemGb => (_snaps.Values.Sum(s => s.MemoryBytes) / 1_073_741_824.0).ToString("0.0");
+    private int AttentionCount => _snaps.Values.Count(s => s.State is ServerState.Held or ServerState.Crashed || (s.State == ServerState.Running && !s.ApiReachable));
+    private string AttentionFoot
+    {
+        get
+        {
+            var rt = _runtimes.FirstOrDefault(r => { var s = Snap(r.Id); return s.State is ServerState.Held or ServerState.Crashed || (s.State == ServerState.Running && !s.ApiReachable); });
+            return rt is null ? "everything nominal" : $"{rt.Config.Name} — {StateLabel(Snap(rt.Id))}";
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthState.GetAuthenticationStateAsync();
         _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
-        _runtimes = Manager.All();
+        _runtimes = Manager.All().OrderBy(r => r.Config.Name).ToList();
         foreach (var rt in _runtimes)
         {
             _snaps[rt.Id] = rt.Snapshot.Current;
             rt.Snapshot.Changed += OnSnapshot;
         }
+        await LoadHistoryAsync();
+    }
+
+    // Recent player-count series per server, for the heartbeat sparklines.
+    private async Task LoadHistoryAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            foreach (var rt in _runtimes)
+            {
+                var rows = (await db.Samples.Where(s => s.ServerId == rt.Id).ToListAsync())
+                    .OrderByDescending(s => s.Ts).Take(24).OrderBy(s => s.Ts)
+                    .Select(s => (double)s.Players).ToArray();
+                if (rows.Length >= 2) _history[rt.Id] = rows;
+            }
+        }
+        catch { /* sparklines are decorative; never block the fleet on a history read */ }
+    }
+
+    private Spark? Heartbeat(Guid id)
+    {
+        if (!_history.TryGetValue(id, out var vals) || vals.Length < 2) return null;
+        double min = vals.Min(), max = vals.Max();
+        double span = max - min < 1 ? 1 : max - min;
+        int n = vals.Length;
+        var pts = new List<string>(n);
+        double endY = 20;
+        for (int i = 0; i < n; i++)
+        {
+            double x = 320.0 * i / (n - 1);
+            double y = 34 - (vals[i] - min) / span * 28; // 6..34 range, inverted
+            if (i == n - 1) endY = y;
+            pts.Add($"{x.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} {y.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}");
+        }
+        var line = "M" + string.Join(" L", pts);
+        var area = line + " L320 40 L0 40 Z";
+        return new Spark(line, area, endY.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
     }
 
     private void OnSnapshot(ServerSnapshot s)
     {
-        // Match the snapshot to its runtime by identity: each runtime's SnapshotService raises
-        // its own Changed, but the payload doesn't carry the id, so resolve via Current.
         InvokeAsync(() =>
         {
-            foreach (var rt in _runtimes)
-                _snaps[rt.Id] = rt.Snapshot.Current;
+            foreach (var rt in _runtimes) _snaps[rt.Id] = rt.Snapshot.Current;
             StateHasChanged();
         });
     }
@@ -102,16 +262,28 @@ else
     private static bool CanStart(ServerSnapshot s) => s.State is ServerState.Stopped or ServerState.Held;
     private static bool CanStop(ServerSnapshot s) => s.State is ServerState.Running or ServerState.Starting;
 
-    private static string StateCss(ServerState s) => s switch
-    { ServerState.Running => "ok", ServerState.Held or ServerState.Crashed => "bad", _ => "warn" };
+    private static string StVar(ServerSnapshot s) => s.State switch
+    {
+        ServerState.Running => s.ApiReachable ? "var(--online)" : "var(--warn)",
+        ServerState.Starting or ServerState.Stopping => "var(--warn)",
+        ServerState.Held or ServerState.Crashed => "var(--down)",
+        _ => "var(--ink-3)"
+    };
     private static string StateLabel(ServerSnapshot s) =>
-        s.State == ServerState.Running && !s.ApiReachable ? "Running — API unreachable" : s.State.ToString();
-    private static string FormatMem(long bytes) => bytes <= 0 ? "—" : $"{bytes / 1_073_741_824.0:0.0} GB";
+        s.State == ServerState.Running && !s.ApiReachable ? "API unreachable" : s.State.ToString();
+    private static string MemLabel(long bytes) => bytes <= 0 ? "—" : $"{bytes / 1_073_741_824.0:0.0} GB";
+    private static int? AvgPing(ServerSnapshot s) => s.Players.Count == 0 ? null : (int)Math.Round(s.Players.Average(p => p.Ping));
+    private static string PortLabel(ServerRuntime rt)
+    {
+        var u = rt.Config.ApiBaseUrl;
+        var i = u.LastIndexOf(':');
+        return i > 4 && i < u.Length - 1 ? $":{u[(i + 1)..].TrimEnd('/')}" : "REST";
+    }
     private static string Uptime(ServerSnapshot s)
     {
         if (s.State != ServerState.Running || s.RunningSince is null) return "—";
         var t = DateTimeOffset.UtcNow - s.RunningSince.Value;
-        return t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h" : $"{t.Hours}h {t.Minutes}m";
+        return t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours:00}h" : $"{t.Hours}h {t.Minutes:00}m";
     }
 
     public void Dispose()
