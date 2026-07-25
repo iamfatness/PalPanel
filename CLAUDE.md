@@ -69,6 +69,11 @@ exposed at `panel.iamfatness.us` via a Cloudflare Tunnel. .NET 8 Blazor Server, 
   circuit. Lifecycle/poller/scheduler errors are logged and contained, never fatal to the loop.
 - **No brittle paths:** prefer robustness over fragile wins (e.g. a bad server config is skipped
   loudly at startup, not fatal; process names must be unique across servers).
+- **Never double-launch:** `ProcessSupervisor.StartAsync` first calls `FindExisting` — if a server
+  matching the process name is already up (started externally, e.g. Steam, or left over), it
+  **adopts** it instead of spawning a rival that would collide on the game/query ports (the
+  "couldn't bind 27015" crash). Start is idempotent w.r.t. an already-running server; the poller
+  also re-adopts externally-started servers each tick.
 - Server-side authorization is DB-authoritative via `IAdminGuard.EnsureAdminAsync` at every
   mutating entry point — `AuthorizeView` only hides UI, it is not a security boundary.
 - Keep this file current in the same change as substantive work.

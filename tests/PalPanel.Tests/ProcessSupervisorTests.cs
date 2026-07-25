@@ -22,6 +22,49 @@ public class ProcessSupervisorTests
     }
 
     [Fact]
+    public async Task Start_WhenServerAlreadyRunning_AdoptsInsteadOfLaunchingSecond()
+    {
+        // Reproduces the "two running" incident: a server was already up (e.g. launched from
+        // Steam). Start must adopt it, not spawn a rival that collides on the game/query ports.
+        var l = new FakeLauncher { Existing = new FakeProcess() };
+        var events = new List<string>();
+        var s = Make(l);
+        s.OnEvent = (type, _) => { events.Add(type); return Task.CompletedTask; };
+
+        await s.StartAsync(CancellationToken.None);
+
+        Assert.Empty(l.Launched);                     // did NOT launch a second process
+        Assert.Equal(ServerState.Running, s.State);   // adopted -> straight to Running
+        Assert.Contains("adopt", events);
+    }
+
+    [Fact]
+    public async Task Start_WhenNothingRunning_LaunchesNormally()
+    {
+        var l = new FakeLauncher();                   // Existing == null
+        var s = Make(l);
+        await s.StartAsync(CancellationToken.None);
+        Assert.Single(l.Launched);
+        Assert.Equal(ServerState.Starting, s.State);
+    }
+
+    [Fact]
+    public async Task Start_AfterAdoption_ExitStillTriggersCrashHandling()
+    {
+        // An adopted process must be watched exactly like a launched one: if the already-running
+        // server dies, auto-restart still kicks in (it launches a fresh one now that none exists).
+        var adopted = new FakeProcess();
+        var l = new FakeLauncher { Existing = adopted };
+        var s = Make(l);
+        await s.StartAsync(CancellationToken.None);
+        l.Existing = null;                            // it's gone now; a relaunch should spawn one
+        adopted.SimulateExit();
+        await s.WaitForIdleAsync();
+        Assert.Single(l.Launched);                    // relaunched after the adopted one crashed
+        Assert.Equal(ServerState.Starting, s.State);
+    }
+
+    [Fact]
     public async Task UnexpectedExit_AutoRestarts()
     {
         var l = new FakeLauncher(); var s = Make(l);
