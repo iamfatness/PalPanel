@@ -1,0 +1,182 @@
+@page "/alerts"
+@using PalPanel.Auth
+@using PalPanel.Control
+@using PalPanel.Data
+@inject AlertService AlertSvc
+@inject AlertSettingsService SettingsSvc
+@inject IAlertNotifier Notifier
+@inject IAdminGuard Guard
+@inject AuthenticationStateProvider AuthState
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Alerts</PageTitle>
+
+<AuthorizeView Roles="Admin">
+    <Authorized>
+        <div class="page-head">
+            <div>
+                <h1>Alerts</h1>
+                <div class="sub">Crashes, unreachable servers, auto-restarts, and low disk — newest first.@(UnackedCount > 0 ? $" {UnackedCount} unacknowledged." : "")</div>
+            </div>
+            <div class="log-controls">
+                <button class="button" @onclick="() => _showSettings = !_showSettings">@(_showSettings ? "Hide email settings" : "Email settings")</button>
+                <button class="button" disabled="@(UnackedCount == 0)" @onclick="AckAllAsync">Acknowledge all</button>
+            </div>
+        </div>
+
+        @if (_showSettings)
+        {
+            <div class="status-card">
+                <h2>Email delivery</h2>
+                <p class="stat-sub">Push Warning &amp; Critical alerts to email (recoveries and routine notices stay in-panel only). For Gmail, use an <b>app password</b> (Google account → Security → App passwords), not your normal password. The password is stored encrypted — it's never shown back or committed to a file.</p>
+                @if (_settingsNotice is not null)
+                {
+                    <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_settingsNotice</div>
+                }
+                @if (_settingsError is not null)
+                {
+                    <div class="alert">@_settingsError</div>
+                }
+                <label class="toggle" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
+                    <input type="checkbox" @bind="_form.EmailEnabled" /> Email alerts enabled
+                </label>
+                <div class="form-grid">
+                    <label>SMTP host<input @bind="_form.SmtpHost" /></label>
+                    <label>SMTP port<input type="number" @bind="_form.SmtpPort" /></label>
+                    <label>SMTP username<input @bind="_form.SmtpUser" placeholder="you@gmail.com" /></label>
+                    <label>App password<input type="password" @bind="_smtpPassword" placeholder="@(_hasPassword ? "•••••••• (leave blank to keep)" : "16-char app password")" /></label>
+                    <label>From<input @bind="_form.From" placeholder="you@gmail.com" /></label>
+                    <label>To (comma-separated)<input @bind="_form.To" placeholder="you@gmail.com" /></label>
+                </div>
+                <div class="actions">
+                    <button class="primary" disabled="@_savingSettings" @onclick="SaveSettingsAsync">Save settings</button>
+                    <button disabled="@_savingSettings" @onclick="SendTestAsync">Save &amp; send test email</button>
+                </div>
+            </div>
+        }
+
+        <table class="data-table">
+            <thead><tr><th></th><th>When</th><th>Scope</th><th>Alert</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var a in _alerts)
+                {
+                    <tr class="@(a.Acknowledged ? "acked" : "")">
+                        <td><span class="sev @Sev(a.Severity)" title="@a.Severity"></span></td>
+                        <td class="mono">@a.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm:ss")</td>
+                        <td>@(string.IsNullOrEmpty(a.ServerName) || a.ServerName == "host" ? "Host" : a.ServerName)</td>
+                        <td>
+                            <div><b>@a.Title</b></div>
+                            @if (!string.IsNullOrWhiteSpace(a.Detail)) { <div class="stat-sub">@a.Detail</div> }
+                        </td>
+                        <td>
+                            @if (a.ResolvedAt is null)
+                            { <span class="reach-row"><span class="reach-dot warn"></span>Active</span> }
+                            else
+                            { <span class="stat-sub">Resolved</span> }
+                        </td>
+                        <td>
+                            @if (!a.Acknowledged)
+                            { <button @onclick="() => AckAsync(a.Id)">Acknowledge</button> }
+                        </td>
+                    </tr>
+                }
+                @if (_alerts.Count == 0)
+                {
+                    <tr><td colspan="6">No alerts. All quiet.</td></tr>
+                }
+            </tbody>
+        </table>
+    </Authorized>
+    <NotAuthorized><p>Admin access required.</p></NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private List<Alert> _alerts = [];
+    private string _email = "";
+
+    private bool _showSettings;
+    private AlertSettings _form = new();
+    private string _smtpPassword = "";
+    private bool _hasPassword;
+    private bool _savingSettings;
+    private string? _settingsNotice;
+    private string? _settingsError;
+
+    private int UnackedCount => _alerts.Count(a => !a.Acknowledged);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        await LoadAsync();
+        await LoadSettingsAsync();
+    }
+
+    private async Task LoadAsync() => _alerts = await AlertSvc.ListAsync();
+
+    private async Task LoadSettingsAsync()
+    {
+        var r = await SettingsSvc.ResolveAsync();
+        _form = new AlertSettings
+        {
+            EmailEnabled = r.EmailEnabled, SmtpHost = r.SmtpHost, SmtpPort = r.SmtpPort,
+            SmtpUser = r.SmtpUser, From = r.From, To = r.To,
+        };
+        _hasPassword = r.HasPassword;
+        _smtpPassword = "";
+    }
+
+    private async Task<bool> PersistSettingsAsync()
+    {
+        _settingsNotice = null; _settingsError = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "alert-email-settings", CancellationToken.None);
+            await SettingsSvc.SaveAsync(_form, _smtpPassword);
+            await LoadSettingsAsync();
+            return true;
+        }
+        catch (Exception ex) { _settingsError = $"Couldn't save: {ex.Message}"; return false; }
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        _savingSettings = true;
+        try { if (await PersistSettingsAsync()) _settingsNotice = "Email settings saved."; }
+        finally { _savingSettings = false; }
+    }
+
+    private async Task SendTestAsync()
+    {
+        _savingSettings = true;
+        try
+        {
+            if (!await PersistSettingsAsync()) return;      // save what's on screen, then test it
+            await Notifier.SendTestAsync(CancellationToken.None);
+            _settingsNotice = "Test email sent — check your inbox (and spam).";
+        }
+        catch (Exception ex) { _settingsError = $"Test failed: {ex.Message}"; }
+        finally { _savingSettings = false; }
+    }
+
+    private async Task AckAsync(long id)
+    {
+        await Guard.EnsureAdminAsync(_email, "alert-ack", CancellationToken.None);
+        await AlertSvc.AcknowledgeAsync(id);
+        await LoadAsync();
+    }
+
+    private async Task AckAllAsync()
+    {
+        await Guard.EnsureAdminAsync(_email, "alert-ack-all", CancellationToken.None);
+        await AlertSvc.AcknowledgeAllAsync();
+        await LoadAsync();
+    }
+
+    private static string Sev(AlertSeverity s) => s switch
+    {
+        AlertSeverity.Critical => "critical",
+        AlertSeverity.Warning => "warning",
+        _ => "info"
+    };
+}

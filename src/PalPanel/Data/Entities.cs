@@ -101,6 +101,42 @@ public class PanelUser
     public DateTimeOffset? LockedUntil { get; set; }
 }
 
+// Panel-wide email-delivery settings for alerts, edited in the UI. Single row (Id = 1). The SMTP
+// password is stored encrypted (SmtpPasswordEnc) with ISecretProtector, exactly like server admin
+// passwords — never in plaintext, never in a committed file.
+public class AlertSettings
+{
+    public int Id { get; set; }
+    public bool EmailEnabled { get; set; }
+    public string SmtpHost { get; set; } = "smtp.gmail.com";
+    public int SmtpPort { get; set; } = 587;
+    public string SmtpUser { get; set; } = "";
+    public string SmtpPasswordEnc { get; set; } = "";
+    public string From { get; set; } = "";
+    public string To { get; set; } = "";
+}
+
+public enum AlertSeverity { Info = 0, Warning = 1, Critical = 2 }
+
+// A raised alert. "Condition" alerts (server down, unreachable, low disk) stay active (ResolvedAt
+// == null) until the condition clears; escalating a still-active alert updates it in place rather
+// than raising a duplicate. "Notification" alerts (auto-restarted, backup failed) are point-in-time
+// and created already-resolved. Acknowledged drives the unread badge; ServerId null = host-level.
+public class Alert
+{
+    public long Id { get; set; }
+    public Guid? ServerId { get; set; }
+    public string ServerName { get; set; } = "";
+    public string Key { get; set; } = "";      // dedup/resolve key within a server (e.g. "server-down")
+    public AlertSeverity Severity { get; set; }
+    public string Title { get; set; } = "";
+    public string Detail { get; set; } = "";
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+    public DateTimeOffset? ResolvedAt { get; set; }   // null = still active
+    public bool Acknowledged { get; set; }
+}
+
 public class Schedule
 {
     public int Id { get; set; }

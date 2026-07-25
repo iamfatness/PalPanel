@@ -283,6 +283,17 @@ input::placeholder { color: var(--ink-3); }
 .reach-dot.bad { background: var(--down); box-shadow: 0 0 0 3px color-mix(in srgb, var(--down) 22%, transparent); }
 .reach-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
 
+/* ===================== Alerts ===================== */
+.nav-badge {
+    margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+    background: var(--down); color: #fff; font: 700 11px/18px var(--mono); text-align: center;
+}
+.sev { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.sev.critical { background: var(--down); box-shadow: 0 0 0 3px color-mix(in srgb, var(--down) 22%, transparent); }
+.sev.warning { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
+.sev.info { background: var(--ink-3); }
+.data-table tr.acked { opacity: .55; }
+
 /* ===================== Responsive ===================== */
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 @media (max-width: 1080px) { .vitals { grid-template-columns: repeat(2, 1fr); } }

@@ -58,12 +58,17 @@ public sealed class ServerRuntime
         HttpClient http,
         IDbContextFactory<PanelDb> dbf,
         IAdminGuard guard,
-        ISecretProtector protector)
+        ISecretProtector protector,
+        AlertService? alerts = null)
     {
         var opts = Options.Create(ToPanelOptions(cfg, protector.Unprotect(cfg.AdminPasswordEnc)));
         var sup = new ProcessSupervisor(launcher, opts);
         var api = new PalApiClient(http, new PalApiSettings(cfg.ApiBaseUrl, protector.Unprotect(cfg.AdminPasswordEnc)));
-        var sink = new ServerEventSink(dbf, cfg.Id);
+        // Wrap the DB sink so notable lifecycle events also raise crash/health alerts. Off (raw
+        // sink) when no AlertService is provided (tests / minimal composition).
+        IEventSink sink = alerts is null
+            ? new ServerEventSink(dbf, cfg.Id)
+            : new AlertingEventSink(new ServerEventSink(dbf, cfg.Id), alerts, cfg.Id, cfg.Name);
         var backups = new BackupService(opts, sup, sink);
         var orch = new ServerOrchestrator(sup, api, backups, sink, guard);
         var snap = new SnapshotService();

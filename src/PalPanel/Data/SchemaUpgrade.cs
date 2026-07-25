@@ -44,6 +44,37 @@ public static class SchemaUpgrade
             );
             """, ct);
 
+        // Alerts table (crash/health alerting; added after multi-server).
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "Alerts" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_Alerts" PRIMARY KEY AUTOINCREMENT,
+                "ServerId" TEXT NULL,
+                "ServerName" TEXT NOT NULL DEFAULT '',
+                "Key" TEXT NOT NULL DEFAULT '',
+                "Severity" INTEGER NOT NULL DEFAULT 0,
+                "Title" TEXT NOT NULL DEFAULT '',
+                "Detail" TEXT NOT NULL DEFAULT '',
+                "CreatedAt" TEXT NOT NULL,
+                "UpdatedAt" TEXT NOT NULL,
+                "ResolvedAt" TEXT NULL,
+                "Acknowledged" INTEGER NOT NULL DEFAULT 0
+            );
+            """, ct);
+
+        // AlertSettings table (single-row panel email config; password stored encrypted).
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "AlertSettings" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_AlertSettings" PRIMARY KEY AUTOINCREMENT,
+                "EmailEnabled" INTEGER NOT NULL DEFAULT 0,
+                "SmtpHost" TEXT NOT NULL DEFAULT 'smtp.gmail.com',
+                "SmtpPort" INTEGER NOT NULL DEFAULT 587,
+                "SmtpUser" TEXT NOT NULL DEFAULT '',
+                "SmtpPasswordEnc" TEXT NOT NULL DEFAULT '',
+                "From" TEXT NOT NULL DEFAULT '',
+                "To" TEXT NOT NULL DEFAULT ''
+            );
+            """, ct);
+
         // Servers table (EF maps Guid/string -> TEXT, int -> INTEGER, bool -> INTEGER).
         await db.Database.ExecuteSqlRawAsync("""
             CREATE TABLE IF NOT EXISTS "Servers" (
