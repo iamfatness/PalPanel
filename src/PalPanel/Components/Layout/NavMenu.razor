@@ -96,7 +96,9 @@
 
     private void Resolve()
     {
-        var m = ServerRoute.Match(Nav.ToBaseRelativePath(Nav.Uri));
+        // Match against the full URI: ToBaseRelativePath drops the leading slash ("s/{id}/..."),
+        // so the "/s/{id}" pattern never matched and the whole per-server menu stayed hidden.
+        var m = ServerRoute.Match(Nav.Uri);
         _currentServer = m.Success && Guid.TryParse(m.Groups["id"].Value, out var id) ? Manager.Get(id) : null;
     }
 
