@@ -26,11 +26,24 @@ public sealed class ServerRuntime
 
     public ServerState State => Supervisor.State;
 
+    // The PanelOptions the supervisor reads its launch args from (same instance), so we can update
+    // launch args live without rebuilding the runtime. Null for FromParts-built test runtimes.
+    private readonly PanelOptions? _panelOptions;
+
     private ServerRuntime(ServerConfig cfg, ProcessSupervisor sup, IPalApi api,
-        IServerOrchestrator orch, IBackupService backups, SnapshotService snap, IEventSink events)
+        IServerOrchestrator orch, IBackupService backups, SnapshotService snap, IEventSink events,
+        PanelOptions? panelOptions = null)
     {
         Config = cfg; Supervisor = sup; Api = api; Orchestrator = orch;
-        Backups = backups; Snapshot = snap; Events = events;
+        Backups = backups; Snapshot = snap; Events = events; _panelOptions = panelOptions;
+    }
+
+    // Launch args only affect a FUTURE launch, not the running process, so they can change live.
+    // Mutating the supervisor's PanelOptions (same instance) means its next Launch uses the new args.
+    public void SetLaunchArgs(string args)
+    {
+        Config.LaunchArgs = args;
+        if (_panelOptions is not null) _panelOptions.ServerArgs = args;
     }
 
     // Compose a runtime from already-built parts. Used by Build and by tests that need to
@@ -58,7 +71,7 @@ public sealed class ServerRuntime
         // A failing event sink must be loud but never propagate into supervisor internals.
         sup.OnEvent = async (t, d) => { try { await sink.LogAsync(t, d); } catch { /* sink already loud via ILogger elsewhere */ } };
 
-        return new ServerRuntime(cfg, sup, api, orch, backups, snap, sink);
+        return new ServerRuntime(cfg, sup, api, orch, backups, snap, sink, opts.Value);
     }
 
     // Map the DB-backed per-server config onto the (still single-server-shaped) PanelOptions the

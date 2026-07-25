@@ -87,4 +87,16 @@ public class ServerManagerTests
         var (mgr, _) = Make();
         Assert.Null(mgr.Get(Guid.NewGuid()));
     }
+
+    [Fact]
+    public async Task UpdateLaunchArgs_PersistsAndUpdatesLiveRuntime()
+    {
+        var (mgr, dbf) = Make();
+        var id = await mgr.AddAsync(Cfg("A", "PalA"), "pw");
+        await mgr.UpdateLaunchArgsAsync(id, "-port=8211 -players=32 -publiclobby");
+
+        Assert.Equal("-port=8211 -players=32 -publiclobby", mgr.Get(id)!.Config.LaunchArgs);
+        await using var db = await dbf.CreateDbContextAsync();
+        Assert.Equal("-port=8211 -players=32 -publiclobby", db.Servers.Single().LaunchArgs);
+    }
 }

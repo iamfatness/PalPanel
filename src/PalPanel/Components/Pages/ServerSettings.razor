@@ -73,6 +73,17 @@ else
             <button class="primary" @onclick="SaveAutoRestartAsync">Save auto-restart</button>
         </div>
 
+        <h2>Launch arguments</h2>
+        <p class="stat-sub">Arguments the panel passes when it starts or auto-restarts the server. Editable while running (they only affect the next launch). Match your Steam launch options so a panel-started server is configured the same.</p>
+        @if (_launchNotice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_launchNotice</div>
+        }
+        <div class="send-box">
+            <input @bind="_launchArgs" @bind:event="oninput" placeholder="-port=8211 -players=32 -publiclobby -UseMultithreadForDS" />
+            <button class="primary" @onclick="SaveLaunchArgsAsync">Save launch args</button>
+        </div>
+
         <h2>Diagnostics</h2>
         <table class="data-table">
             <tbody>
@@ -115,6 +126,8 @@ else
     private int _arUnreachable;
     private double _arMemGb;
     private string? _autoNotice;
+    private string _launchArgs = "";
+    private string? _launchNotice;
 
     protected override async Task OnInitializedAsync()
     {
@@ -124,7 +137,20 @@ else
         _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
         _arUnreachable = _rt.Config.AutoRestartUnreachableMinutes;
         _arMemGb = _rt.Config.AutoRestartMemoryGb;
+        _launchArgs = _rt.Config.LaunchArgs;
         await LoadSchedulesAsync();
+    }
+
+    private async Task SaveLaunchArgsAsync()
+    {
+        _launchNotice = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "launch-args", CancellationToken.None);
+            await Manager.UpdateLaunchArgsAsync(Id, _launchArgs);
+            _launchNotice = "Launch args saved — used on the next start/restart.";
+        }
+        catch (Exception ex) { _launchNotice = $"Couldn't save: {ex.Message}"; }
     }
 
     private async Task SaveAutoRestartAsync()

@@ -138,6 +138,21 @@ public sealed class ServerManager(
         }
     }
 
+    // Launch args only affect a future launch, so they're updatable while the server runs: persist,
+    // then apply to the live runtime (which feeds the supervisor's next launch).
+    public async Task UpdateLaunchArgsAsync(Guid id, string args, CancellationToken ct = default)
+    {
+        args = (args ?? "").Trim();
+        await using (var db = await dbf.CreateDbContextAsync(ct))
+        {
+            var row = await db.Servers.FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (row is null) return;
+            row.LaunchArgs = args;
+            await db.SaveChangesAsync(ct);
+        }
+        Get(id)?.SetLaunchArgs(args);
+    }
+
     public async Task RemoveAsync(Guid id, string actor, CancellationToken ct = default)
     {
         if (_runtimes.TryRemove(id, out var rt))
