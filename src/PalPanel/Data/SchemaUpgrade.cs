@@ -23,6 +23,8 @@ public static class SchemaUpgrade
         // Health-based auto-restart config (0 = off).
         ("Servers", "AutoRestartUnreachableMinutes", "INTEGER", "0"),
         ("Servers", "AutoRestartMemoryGb", "REAL", "0"),
+        // SteamCMD app id for updates (Palworld Dedicated Server default).
+        ("Servers", "SteamAppId", "INTEGER", "2394010"),
     };
 
     public static async Task ApplyAsync(PanelDb db, CancellationToken ct = default)

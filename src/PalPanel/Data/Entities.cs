@@ -25,6 +25,7 @@ public class ServerConfig
     // Health-based auto-restart (0 = off), evaluated by the poller.
     public int AutoRestartUnreachableMinutes { get; set; }   // restart if the API is unreachable this long
     public double AutoRestartMemoryGb { get; set; }          // restart if process memory exceeds this many GB
+    public long SteamAppId { get; set; } = 2394010;          // Palworld Dedicated Server; used for SteamCMD updates
 }
 
 public class Sample

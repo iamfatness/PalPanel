@@ -11,6 +11,7 @@
 @inject IEventSink Events
 @inject AuthenticationStateProvider AuthState
 @inject IAdminGuard Guard
+@inject SteamCmdService Steam
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — @(_rt?.Config.Name ?? "Server") Settings</PageTitle>
@@ -84,6 +85,24 @@ else
             <button class="primary" @onclick="SaveLaunchArgsAsync">Save launch args</button>
         </div>
 
+        <h2>Server updates</h2>
+        <p class="stat-sub">Updates the Palworld server files via SteamCMD (installed automatically on first use). Updating stops the server, updates, and restarts it — watch History for progress.</p>
+        @if (_updateNotice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_updateNotice</div>
+        }
+        <table class="data-table">
+            <tbody>
+                <tr><td>Installed build</td><td class="mono">@(_installedBuild?.ToString() ?? "unknown")</td></tr>
+                <tr><td>Latest build</td><td class="mono">@(_latestBuild?.ToString() ?? "—")</td></tr>
+                <tr><td>Status</td><td>@UpdateStatus</td></tr>
+            </tbody>
+        </table>
+        <div class="actions">
+            <button disabled="@_checking" @onclick="CheckAsync">Check for updates</button>
+            <button class="primary" disabled="@_updating" @onclick="UpdateNowAsync">Update now</button>
+        </div>
+
         <h2>Diagnostics</h2>
         <table class="data-table">
             <tbody>
@@ -128,6 +147,19 @@ else
     private string? _autoNotice;
     private string _launchArgs = "";
     private string? _launchNotice;
+    private long? _installedBuild;
+    private long? _latestBuild;
+    private bool _checking;
+    private bool _updating;
+    private string? _updateNotice;
+
+    private string UpdateStatus => (_installedBuild, _latestBuild) switch
+    {
+        (null, _) => "no Steam manifest found",
+        ({ } i, { } l) when i == l => "up to date",
+        ({ }, { }) => "update available",
+        _ => "unknown (run Check)"
+    };
 
     protected override async Task OnInitializedAsync()
     {
@@ -138,7 +170,61 @@ else
         _arUnreachable = _rt.Config.AutoRestartUnreachableMinutes;
         _arMemGb = _rt.Config.AutoRestartMemoryGb;
         _launchArgs = _rt.Config.LaunchArgs;
+        _installedBuild = ReadInstalledBuild();
         await LoadSchedulesAsync();
+    }
+
+    private long? ReadInstalledBuild()
+    {
+        var manifest = SteamManifest.ManifestPathFromExe(_rt!.Config.ExePath, _rt.Config.SteamAppId);
+        return manifest is null ? null : SteamManifest.Read(manifest)?.BuildId;
+    }
+
+    private async Task CheckAsync()
+    {
+        _checking = true; _updateNotice = null;
+        try
+        {
+            _installedBuild = ReadInstalledBuild();
+            _latestBuild = await Steam.GetLatestBuildAsync(_rt!.Config.SteamAppId);
+            if (_latestBuild is null) _updateNotice = "Couldn't reach the Steam build API — you can still update directly.";
+        }
+        finally { _checking = false; }
+    }
+
+    private async Task UpdateNowAsync()
+    {
+        _updateNotice = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "server-update", CancellationToken.None);
+            var installDir = SteamManifest.InstallDirFromExe(_rt!.Config.ExePath);
+            if (string.IsNullOrWhiteSpace(installDir)) { _updateNotice = "Can't determine the server's install directory."; return; }
+            _updating = true;
+            _updateNotice = "Update started — the server will stop, update, and restart. Watch History for progress.";
+
+            var rt = _rt; var appId = rt.Config.SteamAppId; var actor = _email; var dir = installDir;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await rt.Events.LogAsync("update", "Server update starting — stopping server");
+                    await rt.Orchestrator.StopAsync(actor, CancellationToken.None);
+                    await rt.Events.LogAsync("update", "Running SteamCMD app_update…");
+                    var ok = await Steam.UpdateAsync(dir, appId, async line =>
+                    {
+                        // Forward only meaningful SteamCMD lines to the event log, not every tick.
+                        if (line.Contains("Update state") || line.Contains("Success") || line.Contains("ERROR", StringComparison.OrdinalIgnoreCase) || line.Contains("fully installed"))
+                            await rt.Events.LogAsync("update-log", line);
+                    }, CancellationToken.None);
+                    await rt.Events.LogAsync("update", ok ? "Update complete — restarting server" : "Update FAILED (see update-log)");
+                    if (ok) await rt.Orchestrator.StartAsync(actor, CancellationToken.None);
+                }
+                catch (Exception ex) { await rt.Events.LogAsync("update-failed", ex.Message); }
+            });
+        }
+        catch (Exception ex) { _updateNotice = ex.Message; }
+        finally { _updating = false; }
     }
 
     private async Task SaveLaunchArgsAsync()

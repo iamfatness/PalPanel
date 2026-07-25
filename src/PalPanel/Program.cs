@@ -41,6 +41,7 @@ builder.Services.AddSingleton<PalPanel.Auth.IAdminGuard, PalPanel.Auth.AdminGuar
 builder.Services.AddSingleton<PalPanel.Auth.IPasswordService, PalPanel.Auth.PasswordService>();
 builder.Services.AddSingleton<PalPanel.Auth.IUserAdminService, PalPanel.Auth.UserAdminService>();
 builder.Services.AddSingleton<PalPanel.Control.BanService>();
+builder.Services.AddSingleton<PalPanel.Control.SteamCmdService>();
 
 // Multi-server core: ServerManager owns the per-server runtimes; it is the IServerRegistry the
 // poller/scheduler/UI resolve servers through.
