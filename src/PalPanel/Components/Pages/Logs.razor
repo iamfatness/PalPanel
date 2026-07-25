@@ -1,0 +1,163 @@
+@page "/s/{Id:guid}/logs"
+@using PalPanel.Auth
+@using PalPanel.Control
+@using PalPanel.Servers
+@implements IDisposable
+@inject ServerManager Manager
+@inject IAdminGuard Guard
+@inject AuthenticationStateProvider AuthState
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Logs</PageTitle>
+
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
+<AuthorizeView Roles="Admin">
+    <Authorized>
+        <div class="page-head">
+            <div>
+                <h1>Server log</h1>
+                <div class="sub">Live tail of <b>@_rt.Config.Name</b>'s console log.</div>
+            </div>
+            <div class="log-controls">
+                <label class="toggle" title="Refresh every few seconds">
+                    <input type="checkbox" checked="@_auto" @onchange="ToggleAuto" /> Auto-refresh
+                </label>
+                <button class="button" @onclick="RefreshAsync" disabled="@_busy">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M20 11a8 8 0 10-.6 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M20 5v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        @if (_launchNotice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_launchNotice</div>
+        }
+
+        @if (_view is { Exists: false })
+        {
+            <div class="alert log-missing">
+                <p>No log file yet at <span class="mono">@_view.Path</span>.</p>
+                <p class="stat-sub">Palworld only writes a console log when the server is started with the <span class="mono">-log</span> switch. Add it to the launch arguments, then restart the server (a panel-started or auto-restarted server will pick it up automatically).</p>
+                @if (!LogReader.HasLogArg(_rt.Config.LaunchArgs))
+                {
+                    <button class="button primary" @onclick="AddLogArgAsync" disabled="@_busy">Add -log to launch arguments</button>
+                }
+                else
+                {
+                    <p class="stat-sub"><b>-log</b> is already in the launch arguments — restart the server to begin writing the log.</p>
+                }
+            </div>
+        }
+        else if (_view is not null)
+        {
+            <div class="log-meta">
+                <span class="mono">@_view.Path</span>
+                <span>· @FormatBytes(_view.SizeBytes)</span>
+                @if (_view.ModifiedUtc is { } m) { <span>· updated @m.ToLocalTime().ToString("HH:mm:ss")</span> }
+                <span>· @_view.Lines.Count lines shown</span>
+            </div>
+            <pre class="logbox" @ref="_logEl">@string.Join('\n', _view.Lines)</pre>
+        }
+    </Authorized>
+    <NotAuthorized><p>Admin access required.</p></NotAuthorized>
+</AuthorizeView>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerRuntime? _rt;
+    private LogReader.LogView? _view;
+    private string _email = "";
+    private bool _busy;
+    private bool _auto = true;
+    private string? _launchNotice;
+    private ElementReference _logEl;
+    private CancellationTokenSource? _autoCts;
+    private const int TailLines = 400;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        await RefreshAsync();
+        StartAuto();
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_rt is null) return;
+        _busy = true;
+        try { _view = await LogReader.ReadTailAsync(LogReader.PalLogPath(_rt.Config.SaveDirectory), TailLines); }
+        catch (Exception ex) { _view = new LogReader.LogView(true, "", 0, null, new[] { $"(couldn't read log: {ex.Message})" }); }
+        finally { _busy = false; }
+    }
+
+    private void ToggleAuto(ChangeEventArgs e)
+    {
+        _auto = e.Value is true;
+        if (_auto) StartAuto(); else StopAuto();
+    }
+
+    private void StartAuto()
+    {
+        StopAuto();
+        if (!_auto) return;
+        _autoCts = new CancellationTokenSource();
+        var ct = _autoCts.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(4), ct);
+                    if (ct.IsCancellationRequested) break;
+                    await RefreshAsync();
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (OperationCanceledException) { /* toggled off / navigated away */ }
+        });
+    }
+
+    private void StopAuto()
+    {
+        _autoCts?.Cancel();
+        _autoCts?.Dispose();
+        _autoCts = null;
+    }
+
+    private async Task AddLogArgAsync()
+    {
+        if (_rt is null) return;
+        _launchNotice = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "launch-args", CancellationToken.None);
+            var args = (_rt.Config.LaunchArgs ?? "").Trim();
+            var updated = string.IsNullOrEmpty(args) ? "-log" : $"{args} -log";
+            await Manager.UpdateLaunchArgsAsync(Id, updated);
+            _launchNotice = "Added -log to the launch arguments. Restart the server to start writing the log.";
+        }
+        catch (Exception ex) { _launchNotice = $"Couldn't update launch args: {ex.Message}"; }
+    }
+
+    private static string FormatBytes(long b) => b switch
+    {
+        >= 1_073_741_824 => $"{b / 1_073_741_824.0:0.0} GB",
+        >= 1_048_576 => $"{b / 1_048_576.0:0.0} MB",
+        >= 1024 => $"{b / 1024.0:0.0} KB",
+        _ => $"{b} B"
+    };
+
+    public void Dispose() => StopAuto();
+}

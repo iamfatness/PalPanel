@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
@@ -20,23 +21,39 @@ builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true);
 
 builder.Services.Configure<PalPanel.PanelOptions>(builder.Configuration.GetSection("Panel"));
 builder.Services.AddSingleton<IProcessLauncher, RealProcessLauncher>();
-builder.Services.AddSingleton<ProcessSupervisor>();
-builder.Services.AddHttpClient<IPalApi, PalApiClient>();
+builder.Services.AddHttpClient();   // IHttpClientFactory; ServerManager creates one client per server
 builder.Services.AddDbContextFactory<PalPanel.Data.PanelDb>(o =>
     o.UseSqlite($"Data Source={builder.Configuration["Panel:DbPath"] ?? "palpanel.db"}"));
+
+// Data Protection keyring persisted next to the DB so per-server secret encryption survives
+// service restarts / account changes (a Windows-service host has no default per-user key store).
+var keyRingDir = Path.Combine(
+    Path.GetDirectoryName(Path.GetFullPath(builder.Configuration["Panel:DbPath"] ?? "palpanel.db")) ?? ".",
+    "dp-keys");
+Directory.CreateDirectory(keyRingDir);
+builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(keyRingDir));
+builder.Services.AddSingleton<PalPanel.Auth.ISecretProtector, PalPanel.Auth.DataProtectionSecretProtector>();
+
+// Panel-level (non-server-scoped) event sink; per-server events go through each runtime's own
+// ServerEventSink (built inside ServerRuntime).
 builder.Services.AddSingleton<PalPanel.Data.IEventSink, PalPanel.Data.DbEventSink>();
-builder.Services.AddSingleton<PalPanel.Control.IBackupService, PalPanel.Control.BackupService>();
 builder.Services.AddSingleton<PalPanel.Auth.IAdminGuard, PalPanel.Auth.AdminGuard>();
 builder.Services.AddSingleton<PalPanel.Auth.IPasswordService, PalPanel.Auth.PasswordService>();
 builder.Services.AddSingleton<PalPanel.Auth.IUserAdminService, PalPanel.Auth.UserAdminService>();
-builder.Services.AddSingleton<PalPanel.Control.IServerOrchestrator, PalPanel.Control.ServerOrchestrator>();
+builder.Services.AddSingleton<PalPanel.Control.BanService>();
+builder.Services.AddSingleton<PalPanel.Control.SteamCmdService>();
+builder.Services.AddSingleton<PalPanel.Control.ReachabilityService>();
+
+// Multi-server core: ServerManager owns the per-server runtimes; it is the IServerRegistry the
+// poller/scheduler/UI resolve servers through.
+builder.Services.AddSingleton<PalPanel.Servers.ServerManager>();
+builder.Services.AddSingleton<PalPanel.Servers.IServerRegistry>(sp => sp.GetRequiredService<PalPanel.Servers.ServerManager>());
+
 builder.Services.AddHostedService(sp => new PalPanel.Control.SchedulerService(
     sp.GetRequiredService<IDbContextFactory<PalPanel.Data.PanelDb>>(),
-    sp.GetRequiredService<PalPanel.Control.IServerOrchestrator>(),
-    sp.GetRequiredService<PalPanel.Control.IBackupService>(),
+    sp.GetRequiredService<PalPanel.Servers.IServerRegistry>(),
     sp.GetRequiredService<PalPanel.Data.IEventSink>(),
     sp.GetRequiredService<ILogger<PalPanel.Control.SchedulerService>>()));
-builder.Services.AddSingleton<SnapshotService>();
 builder.Services.AddSingleton<PollerService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PollerService>());
 builder.Services.AddHostedService(sp => new RetentionService(
@@ -159,25 +176,38 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
     o.KnownProxies.Clear();
 });
 
-builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+builder.Services.AddRazorComponents().AddInteractiveServerComponents(o =>
+{
+    // Through the Cloudflare Tunnel a SignalR circuit can briefly drop (idle upgrade, edge
+    // hiccup). Retain the disconnected circuit server-side for a few minutes so a client that
+    // reconnects RESUMES its exact circuit (component state intact) instead of getting a fresh
+    // one — the difference between "buttons work again" and "everything reset". Paired with the
+    // extended client-side reconnect retries in App.razor.
+    o.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(3);
+    o.DisconnectedCircuitMaxRetained = 100;
+});
 
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
-    scope.ServiceProvider.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<PalPanel.Data.PanelDb>>().CreateDbContext().Database.EnsureCreated();
+    var dbf = scope.ServiceProvider.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<PalPanel.Data.PanelDb>>();
+    await using var db = await dbf.CreateDbContextAsync();
+    await db.Database.EnsureCreatedAsync();
+
+    // EnsureCreated is a no-op on an existing (pre-multi-server) DB, so patch in the Servers
+    // table + ServerId columns idempotently before anything reads the new shape.
+    await PalPanel.Data.SchemaUpgrade.ApplyAsync(db);
+
+    // Upgrade path: on first boot after multi-server, seed one server from the legacy
+    // single-server PanelOptions and stamp existing rows to it (idempotent, no-op afterwards).
+    var legacy = scope.ServiceProvider.GetRequiredService<IOptions<PalPanel.PanelOptions>>().Value;
+    var protector = scope.ServiceProvider.GetRequiredService<PalPanel.Auth.ISecretProtector>();
+    await PalPanel.Data.LegacyServerMigration.EnsureSeededAsync(db, legacy, protector);
 }
 
-var supervisor = app.Services.GetRequiredService<ProcessSupervisor>();
-var eventSink = app.Services.GetRequiredService<PalPanel.Data.IEventSink>();
-// A failing event sink (disk full, DB locked) must be loud but must never propagate
-// into supervisor internals — fall back to ILogger error output.
-supervisor.OnEvent = async (t, d) =>
-{
-    try { await eventSink.LogAsync(t, d); }
-    catch (Exception ex) { app.Logger.LogError(ex, "Event sink write failed for {Type}: {Detail}", t, d); }
-};
-supervisor.AdoptExistingIfRunning();
+// Build the per-server runtimes and adopt any already-running PalServer processes.
+await app.Services.GetRequiredService<PalPanel.Servers.ServerManager>().InitializeAsync();
 
 app.UseForwardedHeaders();
 app.UseStaticFiles();
@@ -235,8 +265,8 @@ app.MapGet("/healthz", () => "ok").AllowAnonymous();
 // built ONLY from the matched BackupInfo.FileName (never the raw route-value `file`) -- List()
 // only ever enumerates *.zip actually present in BackupDirectory, so this can't be steered off
 // that directory or onto an arbitrary name, unlike Path.Combine(dir, file) with the raw input.
-app.MapGet("/backups/download/{file}", async (string file, PalPanel.Control.IBackupService backups,
-    HttpContext ctx, IOptions<PalPanel.PanelOptions> opts, PalPanel.Auth.IAdminGuard guard) =>
+app.MapGet("/backups/download/{server:guid}/{file}", async (Guid server, string file,
+    HttpContext ctx, PalPanel.Servers.ServerManager manager, PalPanel.Auth.IAdminGuard guard) =>
 {
     var email = ctx.User.FindFirst(ClaimTypes.Email)?.Value ?? "";
     try
@@ -247,9 +277,13 @@ app.MapGet("/backups/download/{file}", async (string file, PalPanel.Control.IBac
     {
         return Results.StatusCode(StatusCodes.Status403Forbidden);
     }
-    var info = backups.List().FirstOrDefault(b => b.FileName == file);
+    var rt = manager.Get(server);
+    if (rt is null) return Results.NotFound();
+    var info = rt.Backups.List().FirstOrDefault(b => b.FileName == file);
     if (info is null) return Results.NotFound();
-    var path = Path.Combine(opts.Value.BackupDirectory, info.FileName);
+    // Physical path built only from the matched BackupInfo.FileName (never the raw route value),
+    // and only files actually present in this server's BackupDirectory are ever enumerated.
+    var path = Path.Combine(rt.Config.BackupDirectory, info.FileName);
     return Results.File(path, "application/zip", info.FileName);
 });
 

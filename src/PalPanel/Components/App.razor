@@ -5,17 +5,77 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
-    <link rel="stylesheet" href="app.css" />
-    <link rel="stylesheet" href="PalPanel.styles.css" />
+
+    @* Critical inline theme: paints the correct background on the FIRST frame, before the
+       external stylesheets (and web fonts) finish loading — otherwise the unstyled page flashes
+       white, which reads as a random light-mode flicker on refresh. *@
+    <style>
+        /* Dark-committed default (matches tokens.css); light is opt-in via data-theme="light".
+           No prefers-color-scheme here on purpose — it made the theme flip on re-render. */
+        html { background: #0C111F; color: #EAEEF9; }
+        :root[data-theme="light"] { background: #F3F5FA; color: #121828; }
+    </style>
+    <script>
+        // Define + apply the theme synchronously in <head> so data-theme is set before first
+        // paint. Re-applied on Blazor enhanced navigation, which would otherwise diff the
+        // <html> element back to the server markup and drop the attribute (the flicker).
+        window.palTheme = {
+            apply: function () {
+                try {
+                    var t = localStorage.getItem('palpanel-theme');
+                    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+                    else document.documentElement.removeAttribute('data-theme'); // follow OS preference
+                } catch (e) { /* storage blocked; OS preference governs */ }
+            },
+            toggle: function () {
+                var cur = document.documentElement.getAttribute('data-theme');
+                if (!cur) cur = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                var next = cur === 'dark' ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                try { localStorage.setItem('palpanel-theme', next); } catch (e) { }
+                return next;
+            }
+        };
+        palTheme.apply();
+        document.addEventListener('blazor:enhancedload', function () { palTheme.apply(); });
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+    @* AssetVer is bumped on every stylesheet change so a new deploy busts the Cloudflare edge
+       cache (proxied hostname caches .css); without it the edge serves stale CSS after a deploy. *@
+    <link rel="stylesheet" href="tokens.css?v=@AssetVer" />
+    <link rel="stylesheet" href="app.css?v=@AssetVer" />
+    <link rel="stylesheet" href="PalPanel.styles.css?v=@AssetVer" />
     <HeadOutlet />
 </head>
 
 <body>
     <Routes />
     <ReconnectModal />
-    <script src="_framework/blazor.web.js"></script>
+    <script src="_framework/blazor.web.js" autostart="false"></script>
+    <script>
+        // Extend the client-side reconnect budget (default is ~8 quick retries) so a tunnel
+        // blip doesn't exhaust retries and strand the user on "Failed to rejoin". We do NOT
+        // pass a custom reconnectionHandler — omitting it keeps Blazor's built-in reconnect
+        // modal (#components-reconnect-modal, see ReconnectModal.razor), which already shows
+        // Retry + reload messaging. Server-side circuit retention (Program.cs) lets these
+        // retries resume the SAME circuit rather than reset component state.
+        Blazor.start({
+            circuit: {
+                reconnectionOptions: { maxRetries: 30, retryIntervalMilliseconds: 3000 }
+            }
+        });
+    </script>
     <script src="lib/chart.umd.js"></script>
-    <script src="js/charts.js"></script>
+    <script src="js/charts.js?v=@AssetVer"></script>
 </body>
 
 </html>
+
+@code {
+    // Bump this whenever app.css / tokens.css / charts.js change, so a deploy invalidates the
+    // Cloudflare edge cache for the new asset URLs. (Purge is the fallback; this is the guard.)
+    private const string AssetVer = "nightops-6";
+}

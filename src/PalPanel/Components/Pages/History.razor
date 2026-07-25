@@ -1,12 +1,20 @@
-@page "/history"
+@page "/s/{Id:guid}/history"
 @using Microsoft.EntityFrameworkCore
 @using PalPanel.Data
+@using PalPanel.Servers
 @inject IDbContextFactory<PanelDb> DbFactory
+@inject ServerManager Manager
 @inject IJSRuntime JS
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — History</PageTitle>
 
+@if (Manager.Get(Id) is null)
+{
+    <ServerNotFound />
+}
+else
+{
 <h1>History</h1>
 
 <div class="actions">
@@ -31,9 +39,10 @@
     </div>
 </div>
 
-<div class="charts charts-3">
+<div class="charts">
     <div class="chart"><h3>Players</h3><canvas id="histPlayersChart"></canvas></div>
     <div class="chart"><h3>FPS</h3><canvas id="histFpsChart"></canvas></div>
+    <div class="chart"><h3>CPU (%)</h3><canvas id="histCpuChart"></canvas></div>
     <div class="chart"><h3>Memory (MB)</h3><canvas id="histMemChart"></canvas></div>
 </div>
 
@@ -68,7 +77,11 @@
     </tbody>
 </table>
 
+}
+
 @code {
+    [Parameter] public Guid Id { get; set; }
+
     private const int MaxChartPoints = 300;
 
     private string _range = "24h";
@@ -79,7 +92,7 @@
     private List<EventLog> _events = [];
     private List<string> _eventTypes = [];
     private string _typeFilter = "";
-    private (string[] Labels, double[] Players, double[] Fps, double[] MemMb) _chartData = ([], [], [], []);
+    private (string[] Labels, double[] Players, double[] Fps, double[] Cpu, double[] MemMb) _chartData = ([], [], [], [], []);
 
     private IEnumerable<EventLog> FilteredEvents =>
         string.IsNullOrEmpty(_typeFilter) ? _events : _events.Where(e => e.Type == _typeFilter);
@@ -88,7 +101,7 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        if (firstRender && Manager.Get(Id) is not null)
             await RenderChartsAsync();
     }
 
@@ -121,7 +134,7 @@
         // RetentionService.cs) — load then sort/take client-side. The type filter dropdown is
         // populated from the distinct types actually present in those 200 loaded rows, so
         // filtering is a pure client-side re-render with no extra DB round trip.
-        var allEvents = await db.Events.ToListAsync();
+        var allEvents = await db.Events.Where(e => e.ServerId == Id).ToListAsync();
         _events = allEvents.OrderByDescending(e => e.Ts).Take(200).ToList();
         _eventTypes = _events.Select(e => e.Type).Distinct().OrderBy(t => t).ToList();
         if (!string.IsNullOrEmpty(_typeFilter) && !_eventTypes.Contains(_typeFilter))
@@ -134,7 +147,7 @@
         // Raw Samples are only ever written by PollerService while the server is Running AND
         // the REST API is reachable — so a gap here (uptime % below 100) reflects genuine
         // downtime/unreachability, not missing instrumentation.
-        var rows = (await db.Samples.ToListAsync())
+        var rows = (await db.Samples.Where(s => s.ServerId == Id).ToListAsync())
             .Where(s => s.Ts >= since)
             .OrderBy(s => s.Ts)
             .ToList();
@@ -144,7 +157,7 @@
         _uptimePct = ComputePct(_presentSlots, _expectedSlots);
         _peakPlayers = rows.Count == 0 ? 0 : rows.Max(s => s.Players);
 
-        var points = Downsample(rows.Select(s => (s.Ts, (double)s.Players, s.Fps, s.MemoryBytes / 1_048_576.0)).ToList());
+        var points = Downsample(rows.Select(s => (s.Ts, (double)s.Players, s.Fps, s.Cpu, s.MemoryBytes / 1_048_576.0)).ToList());
         _chartData = ToChartData(points, "HH:mm");
     }
 
@@ -152,7 +165,7 @@
         int expectedSlots, string labelFormat)
     {
         var since = now - window;
-        var rows = (await db.SampleRollups.ToListAsync())
+        var rows = (await db.SampleRollups.Where(r => r.ServerId == Id).ToListAsync())
             .Where(r => r.Granularity == granularity && r.Ts >= since)
             .OrderBy(r => r.Ts)
             .ToList();
@@ -162,24 +175,25 @@
         _uptimePct = ComputePct(_presentSlots, _expectedSlots);
         _peakPlayers = rows.Count == 0 ? 0 : rows.Max(r => r.MaxPlayers);
 
-        var points = Downsample(rows.Select(r => (r.Ts, r.AvgPlayers, r.AvgFps, r.AvgMemoryBytes / 1_048_576.0)).ToList());
+        var points = Downsample(rows.Select(r => (r.Ts, r.AvgPlayers, r.AvgFps, r.AvgCpu, r.AvgMemoryBytes / 1_048_576.0)).ToList());
         _chartData = ToChartData(points, labelFormat);
     }
 
     private static double ComputePct(int present, int expected) =>
         expected == 0 ? 0 : Math.Min(100.0, 100.0 * present / expected);
 
-    private static (string[] Labels, double[] Players, double[] Fps, double[] MemMb) ToChartData(
-        List<(DateTimeOffset Ts, double Players, double Fps, double MemMb)> points, string labelFormat) => (
+    private static (string[] Labels, double[] Players, double[] Fps, double[] Cpu, double[] MemMb) ToChartData(
+        List<(DateTimeOffset Ts, double Players, double Fps, double Cpu, double MemMb)> points, string labelFormat) => (
         points.Select(p => p.Ts.ToLocalTime().ToString(labelFormat)).ToArray(),
         points.Select(p => p.Players).ToArray(),
         points.Select(p => p.Fps).ToArray(),
+        points.Select(p => p.Cpu).ToArray(),
         points.Select(p => p.MemMb).ToArray());
 
     // Downsample to at most MaxChartPoints so a chart stays cheap to render regardless of the
     // selected range's underlying row count (mirrors Overview.razor's chart downsampling).
-    private static List<(DateTimeOffset Ts, double Players, double Fps, double MemMb)> Downsample(
-        List<(DateTimeOffset Ts, double Players, double Fps, double MemMb)> rows)
+    private static List<(DateTimeOffset Ts, double Players, double Fps, double Cpu, double MemMb)> Downsample(
+        List<(DateTimeOffset Ts, double Players, double Fps, double Cpu, double MemMb)> rows)
     {
         if (rows.Count <= MaxChartPoints) return rows;
         var bucketSize = (int)Math.Ceiling(rows.Count / (double)MaxChartPoints);
@@ -193,6 +207,7 @@
     {
         await JS.InvokeVoidAsync("palCharts.renderLineChart", "histPlayersChart", _chartData.Labels, _chartData.Players, "players");
         await JS.InvokeVoidAsync("palCharts.renderLineChart", "histFpsChart", _chartData.Labels, _chartData.Fps, "fps");
+        await JS.InvokeVoidAsync("palCharts.renderLineChart", "histCpuChart", _chartData.Labels, _chartData.Cpu, "%");
         await JS.InvokeVoidAsync("palCharts.renderLineChart", "histMemChart", _chartData.Labels, _chartData.MemMb, "MB");
     }
 }

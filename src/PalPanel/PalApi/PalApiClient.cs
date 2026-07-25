@@ -1,20 +1,28 @@
-using Microsoft.Extensions.Options;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
 
 namespace PalPanel.PalApi;
+
+// Per-server connection settings for the Palworld REST API. Previously sourced from the
+// single-server PanelOptions; now supplied per ServerRuntime so each managed server talks to
+// its own endpoint with its own admin password.
+public record PalApiSettings(string BaseUrl, string AdminPassword);
 
 public class PalApiClient : IPalApi
 {
     private readonly HttpClient _http;
 
-    public PalApiClient(HttpClient http, IOptions<PanelOptions> opts)
+    public PalApiClient(HttpClient http, PalApiSettings settings)
     {
         _http = http;
-        _http.BaseAddress = new Uri(opts.Value.ApiBaseUrl.TrimEnd('/') + "/v1/api/");
-        _http.Timeout = TimeSpan.FromSeconds(5);
-        var cred = Convert.ToBase64String(Encoding.UTF8.GetBytes($"admin:{opts.Value.AdminPassword}"));
+        _http.BaseAddress = new Uri(settings.BaseUrl.TrimEnd('/') + "/v1/api/");
+        // Palworld's REST API runs on the game thread and periodically stalls (world saves, load
+        // spikes). A tight timeout turns those transient stalls into false "API unreachable"
+        // flapping, so allow generous headroom; the poller adds hysteresis on top.
+        _http.Timeout = TimeSpan.FromSeconds(12);
+        var cred = Convert.ToBase64String(Encoding.UTF8.GetBytes($"admin:{settings.AdminPassword}"));
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", cred);
     }
 
@@ -45,8 +53,20 @@ public class PalApiClient : IPalApi
         return d is null ? null : new(d.ServerFps, d.CurrentPlayerNum, d.ServerFrameTime, d.MaxPlayerNum, d.Uptime);
     }
 
-    private Task Post(string path, object? body, CancellationToken ct) =>
-        _http.PostAsync(path, body is null ? null : JsonContent.Create(body), ct);
+    private async Task Post(string path, object? body, CancellationToken ct)
+    {
+        // Palworld's minimal REST server REQUIRES a Content-Length and rejects chunked transfer
+        // encoding with 411. JsonContent streams chunked, silently breaking every POST (announce,
+        // save, kick, ...). Serialize to a buffered StringContent so the request carries a known
+        // Content-Length (0 for bodyless actions).
+        var json = body is null ? "" : JsonSerializer.Serialize(body);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var resp = await _http.PostAsync(path, content, ct);
+        // Verify the server accepted the action so callers can honestly confirm success instead of
+        // fire-and-forget. All callers already surface or log exceptions.
+        if (!resp.IsSuccessStatusCode)
+            throw new InvalidOperationException($"The server rejected '{path}' ({(int)resp.StatusCode} {resp.ReasonPhrase}).");
+    }
 
     public Task AnnounceAsync(string message, CancellationToken ct) => Post("announce", new { message }, ct);
     public Task KickAsync(string userId, string message, CancellationToken ct) => Post("kick", new { userid = userId, message }, ct);

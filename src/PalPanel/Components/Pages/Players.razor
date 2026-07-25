@@ -1,18 +1,25 @@
-@page "/players"
+@page "/s/{Id:guid}/players"
 @using Microsoft.EntityFrameworkCore
 @using PalPanel.Control
 @using PalPanel.Data
 @using PalPanel.Monitoring
 @using PalPanel.PalApi
+@using PalPanel.Servers
 @implements IDisposable
-@inject SnapshotService Snap
-@inject IServerOrchestrator Orch
+@inject ServerManager Manager
 @inject AuthenticationStateProvider AuthState
 @inject IDbContextFactory<PanelDb> DbFactory
+@inject BanService Bans
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — Players</PageTitle>
 
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
 <h1>Players</h1>
 
 @if (_error is not null)
@@ -31,8 +38,8 @@
         @foreach (var p in _s.Players)
         {
             <tr>
-                <td>@p.Name</td>
-                <td>@p.UserId</td>
+                <td><a href="@($"/s/{Id}/players/{p.UserId}")">@p.Name</a></td>
+                <td class="mono">@p.UserId</td>
                 <td>@p.Level</td>
                 <td>@p.Ping</td>
                 <AuthorizeView Roles="Admin">
@@ -59,7 +66,7 @@
         @foreach (var s in _recentSessions)
         {
             <tr>
-                <td>@s.Name</td>
+                <td><a href="@($"/s/{Id}/players/{s.UserId}")">@s.Name</a></td>
                 <td>@s.JoinedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
                 <td>@(s.LeftAt is null ? "online" : s.LeftAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))</td>
                 <td>@FormatDuration((s.LeftAt ?? DateTimeOffset.UtcNow) - s.JoinedAt)</td>
@@ -78,7 +85,7 @@
     <tbody>
         @foreach (var t in _totalPlaytime)
         {
-            <tr><td>@t.Name</td><td>@t.UserId</td><td>@FormatDuration(t.Total)</td></tr>
+            <tr><td><a href="@($"/s/{Id}/players/{t.UserId}")">@t.Name</a></td><td class="mono">@t.UserId</td><td>@FormatDuration(t.Total)</td></tr>
         }
         @if (_totalPlaytime.Count == 0)
         {
@@ -87,9 +94,37 @@
     </tbody>
 </table>
 
+<AuthorizeView Roles="Admin"><Authorized>
+    <div class="section-rule"><h2>Banned players</h2><div class="rule"></div></div>
+    <p class="sub">Bans issued through the panel. Bans made directly on the server aren't listed here yet.</p>
+    <table class="data-table">
+        <thead><tr><th>Name</th><th>Reason</th><th>Banned by</th><th>When</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var b in _bans)
+            {
+                <tr>
+                    <td><a href="@($"/s/{Id}/players/{b.UserId}")">@b.Name</a></td>
+                    <td>@(string.IsNullOrWhiteSpace(b.Reason) ? "—" : b.Reason)</td>
+                    <td>@(b.BannedBy ?? "—")</td>
+                    <td>@b.BannedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td><button disabled="@_busy" @onclick="() => UnbanAsync(b)">Unban</button></td>
+                </tr>
+            }
+            @if (_bans.Count == 0)
+            {
+                <tr><td colspan="5">No panel-issued bans.</td></tr>
+            }
+        </tbody>
+    </table>
+</Authorized></AuthorizeView>
+
 <ConfirmDialog @ref="_confirm" />
+}
 
 @code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerRuntime? _rt;
     private ServerSnapshot _s = null!;
     private string _email = "";
     private ConfirmDialog _confirm = null!;
@@ -97,14 +132,20 @@
     private string? _error;
     private List<PlayerSession> _recentSessions = [];
     private List<(string UserId, string Name, TimeSpan Total)> _totalPlaytime = [];
+    private IReadOnlyList<BannedPlayer> _bans = [];
+
+    private IServerOrchestrator Orch => _rt!.Orchestrator;
 
     protected override async Task OnInitializedAsync()
     {
-        _s = Snap.Current;
-        Snap.Changed += OnSnapshot;
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        _s = _rt.Snapshot.Current;
+        _rt.Snapshot.Changed += OnSnapshot;
         var auth = await AuthState.GetAuthenticationStateAsync();
         _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
         await LoadSessionsAsync();
+        _bans = await Bans.ListAsync(Id);
     }
 
     private void OnSnapshot(ServerSnapshot s)
@@ -118,7 +159,7 @@
         // EF Core's Sqlite provider cannot translate DateTimeOffset Where/OrderBy server-side
         // (see Overview.razor / RetentionService.cs for the same established workaround) —
         // load the (retention-bounded) table then filter/sort/group client-side.
-        var all = await db.Sessions.ToListAsync();
+        var all = await db.Sessions.Where(s => s.ServerId == Id).ToListAsync();
         _recentSessions = all.OrderByDescending(s => s.JoinedAt).Take(50).ToList();
 
         var now = DateTimeOffset.UtcNow;
@@ -138,8 +179,30 @@
 
     private async Task ConfirmBan(PlayerInfo p)
     {
-        if (await _confirm.Show($"Ban {p.Name}?", "The player will be permanently banned from the server."))
-            await Do(() => Orch.BanAsync(_email, p.UserId, p.Name, CancellationToken.None));
+        if (!await _confirm.Show($"Ban {p.Name}?", "The player will be banned from the server. Add a reason on their detail page."))
+            return;
+        _busy = true; _error = null;
+        try
+        {
+            await Orch.BanAsync(_email, p.UserId, p.Name, CancellationToken.None);
+            await Bans.RecordAsync(Id, p.UserId, p.Name, "", _email);   // quick ban: no reason
+            _bans = await Bans.ListAsync(Id);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task UnbanAsync(BannedPlayer b)
+    {
+        _busy = true; _error = null;
+        try
+        {
+            await Orch.UnbanAsync(_email, b.UserId, b.Name, CancellationToken.None);
+            await Bans.RemoveAsync(Id, b.UserId);
+            _bans = await Bans.ListAsync(Id);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
     }
 
     private async Task Do(Func<Task> action)
@@ -156,5 +219,5 @@
     private static string FormatDuration(TimeSpan t) =>
         t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h {t.Minutes}m" : $"{(int)t.TotalHours}h {t.Minutes}m";
 
-    public void Dispose() => Snap.Changed -= OnSnapshot;
+    public void Dispose() { if (_rt is not null) _rt.Snapshot.Changed -= OnSnapshot; }
 }

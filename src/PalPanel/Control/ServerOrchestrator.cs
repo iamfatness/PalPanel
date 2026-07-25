@@ -10,6 +10,7 @@ public interface IServerOrchestrator
     Task AnnounceAsync(string actor, string message, CancellationToken ct);
     Task KickAsync(string actor, string userId, string name, CancellationToken ct);
     Task BanAsync(string actor, string userId, string name, CancellationToken ct);
+    Task UnbanAsync(string actor, string userId, string name, CancellationToken ct);
 }
 
 public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupService backups, IEventSink events, IAdminGuard guard)
@@ -128,5 +129,12 @@ public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupServi
         await guard.EnsureAdminAsync(actor, "Ban", ct);
         await api.BanAsync(userId, $"Banned by {actor}", ct);
         await events.LogAsync("ban", $"{name} ({userId}) banned by {actor}", actor);
+    }
+
+    public async Task UnbanAsync(string actor, string userId, string name, CancellationToken ct)
+    {
+        await guard.EnsureAdminAsync(actor, "Unban", ct);
+        await api.UnbanAsync(userId, ct);
+        await events.LogAsync("unban", $"{name} ({userId}) unbanned by {actor}", actor);
     }
 }

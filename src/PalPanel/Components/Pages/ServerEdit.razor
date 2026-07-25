@@ -1,0 +1,86 @@
+@page "/servers/{Id:guid}/edit"
+@using PalPanel.Auth
+@using PalPanel.Data
+@using PalPanel.Servers
+@inject ServerManager Manager
+@inject AuthenticationStateProvider AuthState
+@inject IAdminGuard Guard
+@inject NavigationManager Nav
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Edit server</PageTitle>
+
+<AuthorizeView Roles="Admin">
+    <Authorized>
+        @if (_model is null)
+        {
+            <ServerNotFound />
+        }
+        else
+        {
+            <h1>Edit @_model.Name</h1>
+            @if (_error is not null)
+            {
+                <div class="alert">@_error</div>
+            }
+            <p class="stat-sub">The server must be stopped to save configuration changes.</p>
+            <ServerFormFields Model="_model" @bind-Password="_password" PasswordPlaceholder="Leave blank to keep the current password" />
+            <div class="actions">
+                <button disabled="@_busy" @onclick="SaveAsync">Save changes</button>
+                <a href="@($"/s/{Id}")">Cancel</a>
+                <button class="danger" disabled="@_busy" @onclick="RemoveAsync">Remove server</button>
+            </div>
+            <ConfirmDialog @ref="_confirm" />
+        }
+    </Authorized>
+    <NotAuthorized>
+        <p>Admin access required.</p>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerConfig? _model;
+    private string _password = "";
+    private string _email = "";
+    private bool _busy;
+    private string? _error;
+    private ConfirmDialog _confirm = null!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        _model = await Manager.GetConfigAsync(Id);
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "server-edit", CancellationToken.None);
+            await Manager.UpdateAsync(_model!, string.IsNullOrEmpty(_password) ? null : _password);
+            Nav.NavigateTo($"/s/{Id}");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task RemoveAsync()
+    {
+        if (!await _confirm.Show($"Remove {_model!.Name}?",
+            "This stops the server (if running) and deletes its configuration. History rows remain in the database."))
+            return;
+        _busy = true; _error = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "server-remove", CancellationToken.None);
+            await Manager.RemoveAsync(Id, _email);
+            Nav.NavigateTo("/");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

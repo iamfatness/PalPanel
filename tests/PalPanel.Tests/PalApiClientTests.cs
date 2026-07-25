@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Options;
-using PalPanel;
 using PalPanel.PalApi;
 
 public class PalApiClientTests : IAsyncLifetime
@@ -10,8 +8,7 @@ public class PalApiClientTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _stub = new StubPalServer { PlayerNames = ["Alice", "Bob"] };
-        var o = Options.Create(new PanelOptions { ApiBaseUrl = _stub.BaseUrl, AdminPassword = "pw" });
-        _client = new PalApiClient(new HttpClient(), o);
+        _client = new PalApiClient(new HttpClient(), new PalApiSettings(_stub.BaseUrl, "pw"));
         return Task.CompletedTask;
     }
     public async Task DisposeAsync() => await _stub.DisposeAsync();
@@ -46,5 +43,14 @@ public class PalApiClientTests : IAsyncLifetime
         _stub.Healthy = false;
         Assert.Null(await _client.GetInfoAsync(default));
         Assert.Empty(await _client.GetPlayersAsync(default));
+    }
+
+    [Fact]
+    public async Task Announce_ThrowsWhenServerRejects_SoSuccessIsTrustworthy()
+    {
+        // A rejected broadcast must surface as a failure, not a silent "sent" — this backs the
+        // send-confirmation on the Messages/Overview screens.
+        _stub.Healthy = false; // stub replies 503 to everything
+        await Assert.ThrowsAnyAsync<Exception>(() => _client.AnnounceAsync("hello", default));
     }
 }

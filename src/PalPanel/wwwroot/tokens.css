@@ -1,0 +1,84 @@
+/* PalPanel design tokens - "Night Ops" server-ops console.
+   Dark-committed identity with a considered light theme. New semantic names plus aliases for
+   the legacy token names (--bg-panel, --border, --text, --accent, --ok, --bad) so existing
+   component styles inherit the new palette without markup changes. Loaded before app.css. */
+
+:root {
+    /* --- Surfaces (deep twilight navy; neutrals biased toward the azure accent) --- */
+    --void:#080B14;
+    --bg:#0C111F;
+    --panel:#131A2C;
+    --panel-2:#1A2338;
+    --panel-3:#212B44;
+    --line:#26314C;
+    --line-soft:#1B2440;
+
+    /* --- Ink --- */
+    --ink:#EAEEF9;
+    --ink-2:#9AA7C4;
+    --ink-3:#5D6A88;
+
+    /* --- Brand + accents --- */
+    --azure:#4DA3FF;
+    --azure-bright:#7CC0FF;
+    --violet:#8B7BFF;
+    --amber:#FFB454;
+
+    /* --- Semantic status (separate from the accent) --- */
+    --online:#3DDC97;
+    --warn:#FBB042;
+    --down:#FB6E6E;
+    --ring-track:#20293F;
+
+    /* --- Legacy aliases: keep existing component CSS working on the new palette --- */
+    --bg-panel:var(--panel);
+    --bg-panel-2:var(--panel-2);
+    --bg-panel-3:var(--panel-3);
+    --border:var(--line);
+    --border-strong:var(--panel-3);
+    --text:var(--ink);
+    --text-dim:var(--ink-2);
+    --text-faint:var(--ink-3);
+    --accent:var(--azure);
+    --accent-ink:#04122b;
+    --ok:var(--online);
+    --bad:var(--down);
+    --ok-wash:color-mix(in srgb, var(--online) 15%, transparent);
+    --warn-wash:color-mix(in srgb, var(--warn) 15%, transparent);
+    --bad-wash:color-mix(in srgb, var(--down) 15%, transparent);
+
+    /* --- Type --- */
+    --display:"Space Grotesk","Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+    --sans:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"Cascadia Code","Consolas",monospace;
+
+    --text-xs:0.78rem;
+    --text-sm:0.875rem;
+    --text-md:1rem;
+    --text-lg:1.2rem;
+    --text-xl:1.6rem;
+    --text-2xl:2rem;
+
+    /* --- Spacing / radii / elevation --- */
+    --space-1:0.25rem; --space-2:0.5rem; --space-3:0.75rem;
+    --space-4:1rem; --space-5:1.5rem; --space-6:2rem;
+    --radius-sm:9px; --radius:12px; --radius-lg:16px;
+    --shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 12px 34px -14px rgba(0,0,0,.72);
+    --shadow-sm:0 6px 18px -10px rgba(0,0,0,.6);
+}
+
+/* Night Ops is dark-committed: the base :root above is always dark, regardless of the OS
+   color scheme. This is deliberate (a mission-control console) and, importantly, keeps the
+   theme deterministic — following prefers-color-scheme made the theme flip whenever Blazor
+   briefly dropped the data-theme attribute on re-render. Light is strictly opt-in via the
+   toggle (data-theme="light"). */
+:root[data-theme="light"] {
+    --void:#E6EAF2; --bg:#F3F5FA; --panel:#FFFFFF; --panel-2:#F1F4FA; --panel-3:#E7ECF5;
+    --line:#DCE2ED; --line-soft:#E8ECF4;
+    --ink:#121828; --ink-2:#54617C; --ink-3:#8A94AC;
+    --azure:#2C74E0; --azure-bright:#1D63CC; --violet:#6B5CE0; --amber:#B9781C;
+    --online:#12A063; --warn:#C0871A; --down:#D6483C; --ring-track:#E3E8F1;
+    --shadow:0 1px 2px rgba(16,24,40,.06), 0 12px 30px -16px rgba(16,24,40,.18);
+    --shadow-sm:0 4px 14px -8px rgba(16,24,40,.18);
+    --accent-ink:#ffffff;
+}

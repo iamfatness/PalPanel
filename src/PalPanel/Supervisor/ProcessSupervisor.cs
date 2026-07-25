@@ -16,6 +16,29 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
     public ServerState State { get; private set; } = ServerState.Stopped;
     public DateTimeOffset? RunningSince { get; private set; }
     public long CurrentMemoryBytes => _proc is { HasExited: false } p ? p.WorkingSetBytes : 0;
+
+    // Palworld's PalServer.exe launcher (what this supervisor tracks) is a thin ~6 MB shim that
+    // spawns the real server (PalServer-Win64-Shipping-Cmd) holding the world + RAM. Report the
+    // real server's working set for metrics, falling back to the tracked process if not found.
+    public long GameMemoryBytes(string gameProcessName)
+    {
+        if (State is ServerState.Stopped or ServerState.Held) return 0;
+        if (!string.IsNullOrWhiteSpace(gameProcessName))
+        {
+            var ws = launcher.GetWorkingSetByName(gameProcessName);
+            if (ws > 0) return ws;
+        }
+        return CurrentMemoryBytes;
+    }
+
+    // Cumulative CPU time of the real game server process(es); the poller diffs it across polls
+    // to compute a CPU %. Zero when not running.
+    public TimeSpan GameCpuTime(string gameProcessName)
+    {
+        if (State is ServerState.Stopped or ServerState.Held || string.IsNullOrWhiteSpace(gameProcessName))
+            return TimeSpan.Zero;
+        return launcher.GetCpuTimeByName(gameProcessName);
+    }
     public event Action<ServerState>? StateChanged;
     public Func<string, string, Task>? OnEvent { get; set; }
     // injectable for tests; real delay is exponential backoff capped at 60 s
@@ -43,13 +66,34 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
 
     public async Task StartAsync(CancellationToken ct)
     {
-        int epoch;
+        // Guard against double-launch. A server matching our process name may already be running
+        // that this supervisor isn't tracking — started externally (e.g. from Steam) or left over
+        // from a prior run. Launching a second one collides on the game/query ports (the classic
+        // "bind couldn't find an open port between 27015 and 27015" crash). Adopt the existing
+        // process instead of spawning a rival, so Start is idempotent w.r.t. an already-up server.
+        var existing = launcher.FindExisting(_o.ServerProcessName);
+        int epoch = 0;
+        bool adopted = false;
         lock (_lock)
         {
             if (State is ServerState.Starting or ServerState.Running or ServerState.Stopping) return;
             _epoch++; _stopRequested = false; EnsureTracker(); _crashes.Reset(); _restartAttempt = 0;
-            epoch = _epoch;
-            SetState(ServerState.Starting);
+            if (existing is not null)
+            {
+                _proc = existing; RunningSince = DateTimeOffset.UtcNow;
+                SetState(ServerState.Running); Watch(existing);   // Watch must run under _lock
+                adopted = true;
+            }
+            else
+            {
+                epoch = _epoch;
+                SetState(ServerState.Starting);
+            }
+        }
+        if (adopted)
+        {
+            await Fire("adopt", $"A server is already running (pid {existing!.Pid}); adopted it instead of starting a second instance");
+            return;
         }
         await LaunchAndWatchOrHoldAsync(epoch);
     }

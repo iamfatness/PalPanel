@@ -1,19 +1,26 @@
-@page "/"
+@page "/s/{Id:guid}"
 @using Microsoft.EntityFrameworkCore
 @using PalPanel.Control
 @using PalPanel.Data
 @using PalPanel.Monitoring
+@using PalPanel.Servers
 @using PalPanel.Supervisor
 @implements IDisposable
-@inject SnapshotService Snap
-@inject IServerOrchestrator Orch
+@inject ServerManager Manager
 @inject AuthenticationStateProvider AuthState
 @inject IDbContextFactory<PanelDb> DbFactory
 @inject IJSRuntime JS
+@inject NavigationManager Nav
 @rendermode InteractiveServer
 
-<PageTitle>PalPanel — Overview</PageTitle>
+<PageTitle>PalPanel — @(_rt?.Config.Name ?? "Server")</PageTitle>
 
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
 <div class="status-card @StateCss(_s.State)">
     <h1>@(_s.Info?.ServerName ?? "Palworld Server")</h1>
     <div class="state">@StateLabel(_s)</div>
@@ -28,19 +35,29 @@
 
 <AuthorizeView Roles="Admin">
     <div class="actions">
-        @if (_error is not null)
-        {
-            <div class="alert">@_error</div>
-        }
         <button disabled="@(!CanStart)" @onclick="() => Do(ct => Orch.StartAsync(_email, ct))">Start</button>
         <button disabled="@(!CanStop)" @onclick="ConfirmStop">Stop</button>
         <button disabled="@(!CanStop)" @onclick="ConfirmRestart">Restart</button>
         <button disabled="@(!CanStop)" @onclick="() => Do(ct => Orch.SaveAsync(_email, ct))">Save world</button>
         <input @bind="_announceText" @bind:event="oninput" placeholder="Announce message..." />
-        <button disabled="@(!CanStop || string.IsNullOrWhiteSpace(_announceText))"
-                @onclick="() => Do(ct => Orch.AnnounceAsync(_email, _announceText, ct))">Announce</button>
+        <button disabled="@(!CanStop || string.IsNullOrWhiteSpace(_announceText))" @onclick="AnnounceAsync">Announce</button>
     </div>
+    @if (_notice is not null)
+    {
+        <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_notice</div>
+    }
+    @if (_error is not null)
+    {
+        <div class="alert">@_error</div>
+    }
 </AuthorizeView>
+
+<div class="stats-row">
+    <div class="stat-card"><div class="stat-label">FPS</div><div class="stat-value">@(_s.Metrics is { } m ? m.ServerFps.ToString("0.0") : "—")</div></div>
+    <div class="stat-card"><div class="stat-label">CPU</div><div class="stat-value">@(_s.State == ServerState.Running ? $"{_s.CpuPercent:0}%" : "—")</div></div>
+    <div class="stat-card"><div class="stat-label">Memory</div><div class="stat-value">@(_s.MemoryBytes > 0 ? $"{_s.MemoryBytes / 1_073_741_824.0:0.0} GB" : "—")</div></div>
+    <div class="stat-card"><div class="stat-label">Frame time</div><div class="stat-value">@(_s.Metrics is { } ft ? $"{ft.ServerFrameTime:0.0} ms" : "—")</div></div>
+</div>
 
 <div class="charts">
     <div class="chart"><h3>Players (24 h)</h3><canvas id="playersChart"></canvas></div>
@@ -48,30 +65,39 @@
 </div>
 
 <ConfirmDialog @ref="_confirm" />
+}
 
 @code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerRuntime? _rt;
     private ServerSnapshot _s = null!;
     private string _email = "";
     private string _announceText = "";
     private ConfirmDialog _confirm = null!;
     private bool _busy;
     private string? _error;
+    private string? _notice;
     private DateTimeOffset _lastChartRefresh = DateTimeOffset.MinValue;
+
+    private IServerOrchestrator Orch => _rt!.Orchestrator;
 
     private bool CanStart => !_busy && _s.State is ServerState.Stopped or ServerState.Held;
     private bool CanStop => !_busy && _s.State is ServerState.Running or ServerState.Starting;
 
     protected override async Task OnInitializedAsync()
     {
-        _s = Snap.Current;
-        Snap.Changed += OnSnapshot;
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        _s = _rt.Snapshot.Current;
+        _rt.Snapshot.Changed += OnSnapshot;
         var auth = await AuthState.GetAuthenticationStateAsync();
         _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        if (firstRender && _rt is not null)
             await RenderChartsAsync();
     }
 
@@ -114,7 +140,7 @@
         // capped at ~48h by RetentionService, so loading them all untouched and then
         // filtering/sorting client-side (the same pattern RetentionService itself uses
         // for its own Ts comparisons) is cheap.
-        var rows = (await db.Samples.ToListAsync())
+        var rows = (await db.Samples.Where(s => s.ServerId == Id).ToListAsync())
             .Where(s => s.Ts >= since)
             .OrderBy(s => s.Ts)
             .ToList();
@@ -144,8 +170,24 @@
         // being down, the REST API unreachable, ...) must surface inline to the operator, not
         // propagate as an unhandled exception that kills the Blazor circuit and leaves a dead
         // button with no visible cause.
-        _busy = true; _error = null;
+        _busy = true; _error = null; _notice = null;
         try { await action(CancellationToken.None); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task AnnounceAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_announceText)) return;
+        var message = _announceText.Trim();
+        // AnnounceAsync throws if the server rejects it, so a clean return means it was sent.
+        _busy = true; _error = null; _notice = null;
+        try
+        {
+            await Orch.AnnounceAsync(_email, message, CancellationToken.None);
+            _notice = "Announcement sent to the server.";
+            _announceText = "";
+        }
         catch (Exception ex) { _error = ex.Message; }
         finally { _busy = false; }
     }
@@ -165,5 +207,5 @@
     private static string FormatUptime(TimeSpan t) =>
         t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h" : $"{t.Hours}h {t.Minutes}m";
 
-    public void Dispose() => Snap.Changed -= OnSnapshot;
+    public void Dispose() { if (_rt is not null) _rt.Snapshot.Changed -= OnSnapshot; }
 }

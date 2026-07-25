@@ -1,0 +1,443 @@
+@page "/s/{Id:guid}/settings"
+@using Cronos
+@using Microsoft.EntityFrameworkCore
+@using PalPanel.Auth
+@using PalPanel.Control
+@using PalPanel.Data
+@using PalPanel.PalApi
+@using PalPanel.Servers
+@inject IDbContextFactory<PanelDb> DbFactory
+@inject ServerManager Manager
+@inject IEventSink Events
+@inject AuthenticationStateProvider AuthState
+@inject IAdminGuard Guard
+@inject SteamCmdService Steam
+@inject ReachabilityService Reach
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — @(_rt?.Config.Name ?? "Server") Settings</PageTitle>
+
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
+<AuthorizeView Roles="Admin">
+    <Authorized>
+
+        <h1>@_rt.Config.Name — Settings</h1>
+
+        <h2>Schedules</h2>
+        @if (_scheduleError is not null)
+        {
+            <div class="alert">@_scheduleError</div>
+        }
+        <p class="stat-sub">Cron is UTC. <b>announce</b> broadcasts the message below to in-game chat — handy for recurring reminders (restart warnings, event times, rules).</p>
+        <table class="data-table">
+            <thead><tr><th>Cron (UTC)</th><th>Action</th><th>Message</th><th>Enabled</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var s in _schedules)
+                {
+                    <tr>
+                        <td class="mono">@s.Cron</td>
+                        <td>@s.Action</td>
+                        <td>@(s.Action == "announce" ? s.Parameters : "—")</td>
+                        <td><input type="checkbox" checked="@s.Enabled" @onchange="() => ToggleEnabledAsync(s)" /></td>
+                        <td><button @onclick="() => DeleteScheduleAsync(s)">Delete</button></td>
+                    </tr>
+                }
+                @if (_schedules.Count == 0)
+                {
+                    <tr><td colspan="5">No schedules configured.</td></tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="actions">
+            <input placeholder="Cron expression, e.g. 0 4 * * *" @bind="_newCron" @bind:event="oninput" />
+            <select @bind="_newAction">
+                <option value="restart">restart</option>
+                <option value="backup">backup</option>
+                <option value="announce">announce</option>
+            </select>
+            @if (_newAction == "announce")
+            {
+                <input placeholder="Message to broadcast" @bind="_newParameters" @bind:event="oninput" />
+            }
+            <button @onclick="AddScheduleAsync">Add schedule</button>
+        </div>
+
+        <h2>Auto-restart</h2>
+        <p class="stat-sub">Restart this server automatically when it stops responding or uses too much memory. Set 0 to turn a trigger off. Changes apply immediately — no need to stop the server.</p>
+        @if (_autoNotice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_autoNotice</div>
+        }
+        <div class="form-grid">
+            <label>Restart if API unreachable for (minutes)<input type="number" min="0" @bind="_arUnreachable" /></label>
+            <label>Restart if memory exceeds (GB)<input type="number" min="0" step="0.5" @bind="_arMemGb" /></label>
+        </div>
+        <div class="actions">
+            <button class="primary" @onclick="SaveAutoRestartAsync">Save auto-restart</button>
+        </div>
+
+        <h2>Launch arguments</h2>
+        <p class="stat-sub">Arguments the panel passes when it starts or auto-restarts the server. Editable while running (they only affect the next launch). Match your Steam launch options so a panel-started server is configured the same.</p>
+        @if (_launchNotice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_launchNotice</div>
+        }
+        <div class="send-box">
+            <input @bind="_launchArgs" @bind:event="oninput" placeholder="-port=8211 -players=32 -publiclobby -UseMultithreadForDS" />
+            <button class="primary" @onclick="SaveLaunchArgsAsync">Save launch args</button>
+        </div>
+
+        <h2>Server updates</h2>
+        <p class="stat-sub">Updates the Palworld server files via SteamCMD (installed automatically on first use). Updating stops the server, updates, and restarts it — watch History for progress.</p>
+        @if (_updateNotice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_updateNotice</div>
+        }
+        <table class="data-table">
+            <tbody>
+                <tr><td>Installed build</td><td class="mono">@(_installedBuild?.ToString() ?? "unknown")</td></tr>
+                <tr><td>Latest build</td><td class="mono">@(_latestBuild?.ToString() ?? "—")</td></tr>
+                <tr><td>Status</td><td>@UpdateStatus</td></tr>
+            </tbody>
+        </table>
+        <div class="actions">
+            <button disabled="@_checking" @onclick="CheckAsync">Check for updates</button>
+            <button class="primary" disabled="@_updating" @onclick="UpdateNowAsync">Update now</button>
+        </div>
+
+        <h2>Connectivity</h2>
+        <p class="stat-sub">Checks that players can reach this server: the box's current public IP, whether the game port is open locally, and (if you set a hostname) whether its DNS still points at this box. Set your domain so a changed public IP is caught early.</p>
+        @if (_hostNotice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_hostNotice</div>
+        }
+        <div class="send-box">
+            <input @bind="_publicHostname" @bind:event="oninput" placeholder="Public hostname players connect to, e.g. palworld.example.com" />
+            <button class="primary" @onclick="SaveHostnameAsync">Save hostname</button>
+        </div>
+        <div class="actions">
+            <button disabled="@_reachBusy" @onclick="CheckReachabilityAsync">@(_reachBusy ? "Checking…" : "Run reachability check")</button>
+        </div>
+        @if (_reach is not null)
+        {
+            <table class="data-table">
+                <tbody>
+                    <tr>
+                        <td>Public IP (this box)</td>
+                        <td><span class="reach-row"><span class="reach-dot @(_reach.PublicIp is null ? "bad" : "ok")"></span><span class="mono">@(_reach.PublicIp ?? "unknown")</span></span></td>
+                    </tr>
+                    <tr>
+                        <td>Game port @_reach.GamePort listening locally</td>
+                        <td><span class="reach-row"><span class="reach-dot @(_reach.GamePortListening ? "ok" : "bad")"></span>@(_reach.GamePortListening ? "yes — server is bound to this port" : "no — is the server running?")</span></td>
+                    </tr>
+                    @if (_reach.DnsHostname is not null)
+                    {
+                        <tr>
+                            <td>DNS for @_reach.DnsHostname</td>
+                            <td><span class="mono">@(_reach.DnsAddresses.Count > 0 ? string.Join(", ", _reach.DnsAddresses) : "did not resolve")</span></td>
+                        </tr>
+                        <tr>
+                            <td>DNS points at this box</td>
+                            <td>
+                                <span class="reach-row">
+                                    <span class="reach-dot @(_reach.DnsMatchesPublicIp switch { true => "ok", false => "bad", _ => "warn" })"></span>
+                                    @(_reach.DnsMatchesPublicIp switch { true => "yes — hostname resolves to your public IP", false => "NO — hostname resolves elsewhere; update your DNS record", _ => "couldn't compare (no public IP or no DNS answer)" })
+                                </span>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <p class="stat-sub">A local listener + matching DNS means players using the hostname reach this box. A closed router/firewall port-forward is the one thing this can't see — verify UDP @_reach.GamePort is forwarded if players still can't connect.</p>
+            @if (_reach.Error is not null)
+            {
+                <p class="stat-sub">Note: @_reach.Error</p>
+            }
+        }
+
+        <h2>Diagnostics</h2>
+        <table class="data-table">
+            <tbody>
+                <tr><td>Server executable</td><td>@_rt.Config.ExePath</td></tr>
+                <tr><td>Launch args</td><td>@_rt.Config.LaunchArgs</td></tr>
+                <tr><td>Save directory</td><td>@_rt.Config.SaveDirectory</td></tr>
+                <tr><td>Backup directory</td><td>@_rt.Config.BackupDirectory</td></tr>
+                <tr><td>Backups to keep</td><td>@_rt.Config.BackupsToKeep</td></tr>
+                <tr><td>REST API base URL</td><td>@_rt.Config.ApiBaseUrl</td></tr>
+            </tbody>
+        </table>
+
+        <div class="actions">
+            <button disabled="@_apiTestBusy" @onclick="TestApiAsync">Test REST API</button>
+            <a href="@($"/servers/{Id}/edit")">Edit configuration</a>
+        </div>
+        @if (_apiTestResult is not null)
+        {
+            <p class="stat-sub">@_apiTestResult</p>
+        }
+
+    </Authorized>
+    <NotAuthorized>
+        <p>Admin access required.</p>
+    </NotAuthorized>
+</AuthorizeView>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerRuntime? _rt;
+    private List<Schedule> _schedules = [];
+    private string _email = "";
+    private string? _scheduleError;
+    private string _newCron = "";
+    private string _newAction = "restart";
+    private string _newParameters = "";
+    private bool _apiTestBusy;
+    private string? _apiTestResult;
+    private int _arUnreachable;
+    private double _arMemGb;
+    private string? _autoNotice;
+    private string _launchArgs = "";
+    private string? _launchNotice;
+    private long? _installedBuild;
+    private long? _latestBuild;
+    private bool _checking;
+    private bool _updating;
+    private string? _updateNotice;
+    private string _publicHostname = "";
+    private string? _hostNotice;
+    private bool _reachBusy;
+    private ReachabilityService.Result? _reach;
+
+    private string UpdateStatus => (_installedBuild, _latestBuild) switch
+    {
+        (null, _) => "no Steam manifest found",
+        ({ } i, { } l) when i == l => "up to date",
+        ({ }, { }) => "update available",
+        _ => "unknown (run Check)"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        _arUnreachable = _rt.Config.AutoRestartUnreachableMinutes;
+        _arMemGb = _rt.Config.AutoRestartMemoryGb;
+        _launchArgs = _rt.Config.LaunchArgs;
+        _publicHostname = _rt.Config.PublicHostname;
+        _installedBuild = ReadInstalledBuild();
+        await LoadSchedulesAsync();
+    }
+
+    private async Task SaveHostnameAsync()
+    {
+        _hostNotice = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "public-hostname", CancellationToken.None);
+            await Manager.UpdatePublicHostnameAsync(Id, _publicHostname);
+            _hostNotice = "Public hostname saved.";
+        }
+        catch (Exception ex) { _hostNotice = $"Couldn't save: {ex.Message}"; }
+    }
+
+    private async Task CheckReachabilityAsync()
+    {
+        _reachBusy = true;
+        try
+        {
+            var port = ReachabilityService.ParseGamePort(_rt!.Config.LaunchArgs);
+            var host = string.IsNullOrWhiteSpace(_publicHostname) ? null : _publicHostname;
+            _reach = await Reach.CheckAsync(port, host, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _reach = new ReachabilityService.Result(null, ReachabilityService.ParseGamePort(_rt!.Config.LaunchArgs), false, null, Array.Empty<string>(), null, ex.Message);
+        }
+        finally { _reachBusy = false; }
+    }
+
+    private long? ReadInstalledBuild()
+    {
+        var manifest = SteamManifest.ManifestPathFromExe(_rt!.Config.ExePath, _rt.Config.SteamAppId);
+        return manifest is null ? null : SteamManifest.Read(manifest)?.BuildId;
+    }
+
+    private async Task CheckAsync()
+    {
+        _checking = true; _updateNotice = null;
+        try
+        {
+            _installedBuild = ReadInstalledBuild();
+            _latestBuild = await Steam.GetLatestBuildAsync(_rt!.Config.SteamAppId);
+            if (_latestBuild is null) _updateNotice = "Couldn't reach the Steam build API — you can still update directly.";
+        }
+        finally { _checking = false; }
+    }
+
+    private async Task UpdateNowAsync()
+    {
+        _updateNotice = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "server-update", CancellationToken.None);
+            var installDir = SteamManifest.InstallDirFromExe(_rt!.Config.ExePath);
+            if (string.IsNullOrWhiteSpace(installDir)) { _updateNotice = "Can't determine the server's install directory."; return; }
+            _updating = true;
+            _updateNotice = "Update started — the server will stop, update, and restart. Watch History for progress.";
+
+            var rt = _rt; var appId = rt.Config.SteamAppId; var actor = _email; var dir = installDir;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await rt.Events.LogAsync("update", "Server update starting — stopping server");
+                    await rt.Orchestrator.StopAsync(actor, CancellationToken.None);
+                    await rt.Events.LogAsync("update", "Running SteamCMD app_update…");
+                    var ok = await Steam.UpdateAsync(dir, appId, async line =>
+                    {
+                        // Forward only meaningful SteamCMD lines to the event log, not every tick.
+                        if (line.Contains("Update state") || line.Contains("Success") || line.Contains("ERROR", StringComparison.OrdinalIgnoreCase) || line.Contains("fully installed"))
+                            await rt.Events.LogAsync("update-log", line);
+                    }, CancellationToken.None);
+                    await rt.Events.LogAsync("update", ok ? "Update complete — restarting server" : "Update FAILED (see update-log)");
+                    if (ok) await rt.Orchestrator.StartAsync(actor, CancellationToken.None);
+                }
+                catch (Exception ex) { await rt.Events.LogAsync("update-failed", ex.Message); }
+            });
+        }
+        catch (Exception ex) { _updateNotice = ex.Message; }
+        finally { _updating = false; }
+    }
+
+    private async Task SaveLaunchArgsAsync()
+    {
+        _launchNotice = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "launch-args", CancellationToken.None);
+            await Manager.UpdateLaunchArgsAsync(Id, _launchArgs);
+            _launchNotice = "Launch args saved — used on the next start/restart.";
+        }
+        catch (Exception ex) { _launchNotice = $"Couldn't save: {ex.Message}"; }
+    }
+
+    private async Task SaveAutoRestartAsync()
+    {
+        _autoNotice = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "auto-restart-config", CancellationToken.None);
+            await Manager.UpdateAutoRestartAsync(Id, _arUnreachable, _arMemGb);
+            _autoNotice = "Auto-restart settings saved.";
+        }
+        catch (Exception ex) { _autoNotice = $"Couldn't save: {ex.Message}"; }
+    }
+
+    private async Task LoadSchedulesAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _schedules = await db.Schedules.Where(s => s.ServerId == Id).OrderBy(s => s.Id).ToListAsync();
+    }
+
+    private async Task AddScheduleAsync()
+    {
+        _scheduleError = null;
+        if (string.IsNullOrWhiteSpace(_newCron))
+        {
+            _scheduleError = "Cron expression is required.";
+            return;
+        }
+        try { CronExpression.Parse(_newCron); }
+        catch (Exception ex)
+        {
+            _scheduleError = $"Invalid cron expression '{_newCron}': {ex.Message}";
+            return;
+        }
+        if (_newAction == "announce" && string.IsNullOrWhiteSpace(_newParameters))
+        {
+            _scheduleError = "An announce schedule needs a message to broadcast.";
+            return;
+        }
+
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var s = new Schedule
+            {
+                ServerId = Id,
+                Cron = _newCron,
+                Action = _newAction,
+                Parameters = _newAction == "announce" ? _newParameters.Trim() : null,
+                Enabled = true
+            };
+            db.Schedules.Add(s);
+            await db.SaveChangesAsync();
+            var suffix = s.Action == "announce" ? $": \"{s.Parameters}\"" : "";
+            await Events.LogAsync("schedule-change", $"Added schedule {s.Cron} -> {s.Action}{suffix} on {_rt!.Config.Name}", _email);
+            _newCron = "";
+            _newParameters = "";
+            await LoadSchedulesAsync();
+        }
+        catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }
+    }
+
+    private async Task ToggleEnabledAsync(Schedule s)
+    {
+        _scheduleError = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var row = await db.Schedules.FindAsync(s.Id);
+            if (row is null || row.ServerId != Id) return;
+            row.Enabled = !row.Enabled;
+            await db.SaveChangesAsync();
+            await Events.LogAsync("schedule-change", $"Schedule {row.Id} ({row.Cron}/{row.Action}) enabled={row.Enabled}", _email);
+            await LoadSchedulesAsync();
+        }
+        catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }
+    }
+
+    private async Task DeleteScheduleAsync(Schedule s)
+    {
+        _scheduleError = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var row = await db.Schedules.FindAsync(s.Id);
+            if (row is null || row.ServerId != Id) return;
+            db.Schedules.Remove(row);
+            await db.SaveChangesAsync();
+            await Events.LogAsync("schedule-change", $"Deleted schedule {row.Id} ({row.Cron}/{row.Action})", _email);
+            await LoadSchedulesAsync();
+        }
+        catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }
+    }
+
+    private async Task TestApiAsync()
+    {
+        _apiTestBusy = true;
+        _apiTestResult = null;
+        try
+        {
+            var info = await _rt!.Api.GetInfoAsync(CancellationToken.None);
+            _apiTestResult = info is null
+                ? "No response from REST API."
+                : $"OK — version {info.Version}, server \"{info.ServerName}\"";
+        }
+        catch (Exception ex) { _apiTestResult = $"Failed: {ex.Message}"; }
+        finally { _apiTestBusy = false; }
+    }
+}

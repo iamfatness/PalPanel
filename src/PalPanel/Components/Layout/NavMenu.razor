@@ -1,9 +1,130 @@
+@using System.Text.RegularExpressions
+@using PalPanel.Servers
+@implements IDisposable
+@inject ServerManager Manager
+@inject NavigationManager Nav
+
 <ul class="nav-menu">
-    <li><NavLink href="/" Match="NavLinkMatch.All">Overview</NavLink></li>
-    <li><NavLink href="/players">Players</NavLink></li>
-    <li><NavLink href="/history">History</NavLink></li>
+    <li class="navlabel">Overview</li>
+    <li>
+        <NavLink href="/" Match="NavLinkMatch.All">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="8" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="4" width="8" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="3" y="13" width="8" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="13" width="8" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/></svg>
+            Fleet
+        </NavLink>
+    </li>
+
+    @if (_currentServer is not null)
+    {
+        <li class="nav-server-name">@_currentServer.Config.Name</li>
+        @if (Manager.All().Count > 1)
+        {
+            <li>
+                <select class="nav-switcher" @onchange="SwitchServer">
+                    @foreach (var rt in Manager.All().OrderBy(r => r.Config.Name))
+                    {
+                        <option value="@rt.Id" selected="@(rt.Id == _currentServer.Id)">@rt.Config.Name</option>
+                    }
+                </select>
+            </li>
+        }
+        <li>
+            <NavLink href="@($"/s/{_currentServer.Id}")" Match="NavLinkMatch.All">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h4l2 5 4-12 2 7h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Overview
+            </NavLink>
+        </li>
+        <li>
+            <NavLink href="@($"/s/{_currentServer.Id}/players")">
+                <svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.6-3 3-4.5 5.5-4.5S13.9 16 14.5 19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="17" cy="9" r="2.4" stroke="currentColor" stroke-width="1.6" opacity=".7"/></svg>
+                Players
+            </NavLink>
+        </li>
+        <li>
+            <NavLink href="@($"/s/{_currentServer.Id}/messages")">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M20 12a7.5 7.5 0 01-10.9 6.7L4 20l1.3-4.6A7.5 7.5 0 1120 12z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+                Messages
+            </NavLink>
+        </li>
+        <li>
+            <NavLink href="@($"/s/{_currentServer.Id}/history")">
+                <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                History
+            </NavLink>
+        </li>
+        <AuthorizeView Roles="Admin">
+            <li>
+                <NavLink href="@($"/s/{_currentServer.Id}/backups")">
+                    <svg viewBox="0 0 24 24" fill="none"><rect x="3.5" y="6" width="17" height="13" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 9.5h17M8 3.5v3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                    Backups
+                </NavLink>
+            </li>
+            <li>
+                <NavLink href="@($"/s/{_currentServer.Id}/game-settings")">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="9" cy="6" r="2" fill="var(--panel)" stroke="currentColor" stroke-width="1.7"/><circle cx="15" cy="12" r="2" fill="var(--panel)" stroke="currentColor" stroke-width="1.7"/><circle cx="8" cy="18" r="2" fill="var(--panel)" stroke="currentColor" stroke-width="1.7"/></svg>
+                    Game settings
+                </NavLink>
+            </li>
+            <li>
+                <NavLink href="@($"/s/{_currentServer.Id}/logs")">
+                    <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="3.5" width="16" height="17" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                    Logs
+                </NavLink>
+            </li>
+            <li>
+                <NavLink href="@($"/s/{_currentServer.Id}/settings")">
+                    <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                    Server settings
+                </NavLink>
+            </li>
+        </AuthorizeView>
+    }
+
     <AuthorizeView Roles="Admin">
-        <li><NavLink href="/backups">Backups</NavLink></li>
-        <li><NavLink href="/settings">Settings</NavLink></li>
+        <li class="navlabel">Panel</li>
+        <li>
+            <NavLink href="/host">
+                <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="3" y="13" width="18" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><circle cx="7" cy="7.5" r="1" fill="currentColor"/><circle cx="7" cy="16.5" r="1" fill="currentColor"/></svg>
+                Host
+            </NavLink>
+        </li>
+        <li>
+            <NavLink href="/settings">
+                <svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.6-3 3-4.5 5.5-4.5S13.9 16 14.5 19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                Users &amp; access
+            </NavLink>
+        </li>
     </AuthorizeView>
 </ul>
+
+@code {
+    private static readonly Regex ServerRoute = new(@"/s/(?<id>[0-9a-fA-F-]{36})", RegexOptions.Compiled);
+    private ServerRuntime? _currentServer;
+
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        Resolve();
+    }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        Resolve();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Resolve()
+    {
+        // Match against the full URI: ToBaseRelativePath drops the leading slash ("s/{id}/..."),
+        // so the "/s/{id}" pattern never matched and the whole per-server menu stayed hidden.
+        var m = ServerRoute.Match(Nav.Uri);
+        _currentServer = m.Success && Guid.TryParse(m.Groups["id"].Value, out var id) ? Manager.Get(id) : null;
+    }
+
+    private void SwitchServer(ChangeEventArgs e)
+    {
+        if (Guid.TryParse(e.Value?.ToString(), out var id))
+            Nav.NavigateTo($"/s/{id}");
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

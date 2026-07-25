@@ -1,0 +1,173 @@
+@page "/s/{Id:guid}/game-settings"
+@using PalPanel.Auth
+@using PalPanel.Control
+@using PalPanel.Servers
+@inject ServerManager Manager
+@inject AuthenticationStateProvider AuthState
+@inject IAdminGuard Guard
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Game settings</PageTitle>
+
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
+<AuthorizeView Roles="Admin">
+    <Authorized>
+        <div class="page-head">
+            <div>
+                <h1>Game settings</h1>
+                <div class="sub">Edit <b>@_rt.Config.Name</b>'s world options. Changes apply on the next server restart.</div>
+            </div>
+            @if (_fields is not null)
+            {
+                <div class="seg">
+                    <button class="@(_advanced ? "" : "on")" @onclick="() => _advanced = false">Simple</button>
+                    <button class="@(_advanced ? "on" : "")" @onclick="() => _advanced = true">Advanced</button>
+                </div>
+            }
+        </div>
+
+        @if (_notice is not null) { <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_notice</div> }
+        @if (_error is not null) { <div class="alert">@_error</div> }
+
+        @if (_fields is null)
+        {
+            <div class="empty-state">
+                <p>No <code>PalWorldSettings.ini</code> was found for this server yet.</p>
+                <p class="stat-sub">It's created once the server has run with custom settings, at<br><span class="mono">@PalSettingsFile.PathFor(_rt.Config.SaveDirectory)</span></p>
+            </div>
+        }
+        else
+        {
+            var shown = _advanced ? _fields : _fields.Where(f => f.Simple).ToList();
+            @if (shown.Count == 0)
+            {
+                <div class="empty-state"><p>No settings to show in the Simple view.</p></div>
+            }
+            @foreach (var group in shown.GroupBy(f => f.Group))
+            {
+                <div class="section-rule"><h2>@group.Key</h2><div class="rule"></div></div>
+                <div class="form-grid">
+                    @foreach (var f in group)
+                    {
+                        <label class="@(f.Kind == PalFieldKind.Bool ? "checkbox" : "")">
+                            @if (f.Kind == PalFieldKind.Bool)
+                            {
+                                <input type="checkbox" checked="@(f.Value == "True")"
+                                       @onchange="e => SetBool(f, e)" /> @f.Label
+                            }
+                            else if (f.Kind == PalFieldKind.Enum)
+                            {
+                                @f.Label
+                                <select value="@f.Value" @onchange="e => f.Value = e.Value?.ToString() ?? f.Value">
+                                    @foreach (var opt in f.Options) { <option value="@opt" selected="@(opt == f.Value)">@opt</option> }
+                                </select>
+                            }
+                            else if (f.Kind == PalFieldKind.Number)
+                            {
+                                @f.Label
+                                <input type="number" step="@(f.IsFloat ? "0.1" : "1")" @bind="f.Value" />
+                            }
+                            else
+                            {
+                                @f.Label
+                                <input type="text" @bind="f.Value" />
+                            }
+                            @if (OverrideNote(f) is { } note)
+                            {
+                                <span class="field-note">@note</span>
+                            }
+                        </label>
+                    }
+                </div>
+            }
+
+            <div class="actions">
+                <button class="primary" disabled="@_busy" @onclick="SaveAsync">Save settings</button>
+                <button disabled="@_busy" @onclick="SaveAndRestartAsync">Save &amp; restart server</button>
+                <span class="stat-sub">A restart is required for changes to take effect.</span>
+            </div>
+        }
+    </Authorized>
+    <NotAuthorized><p>Admin access required.</p></NotAuthorized>
+</AuthorizeView>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerRuntime? _rt;
+    private PalGameSettings? _settings;
+    private List<PalSettingField>? _fields;
+    private bool _advanced;
+    private string _email = "";
+    private bool _busy;
+    private string? _notice;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        await LoadAsync();
+    }
+
+    private static void SetBool(PalSettingField f, ChangeEventArgs e) =>
+        f.Value = e.Value is true ? "True" : "False";
+
+    // Some ini settings are overridden by launch arguments at runtime (max players by -players,
+    // etc.), so the ini value here isn't what the server is actually using. Surface the effective
+    // value from the live server so the editor isn't misleading.
+    private string? OverrideNote(PalSettingField f)
+    {
+        if (f.Key == "ServerPlayerMaxNum"
+            && _rt?.Snapshot.Current.Metrics?.MaxPlayerNum is { } running
+            && int.TryParse(f.Value, out var ini) && running != ini)
+            return $"⚠ Running server is using {running} (a launch argument like -players overrides this). Change it in your launch options, not here.";
+        return null;
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _settings = await PalSettingsFile.LoadAsync(_rt!.Config.SaveDirectory);
+            _fields = _settings is null ? null : PalSettingsCatalog.BuildFields(_settings);
+        }
+        catch (Exception ex) { _error = $"Couldn't read settings: {ex.Message}"; }
+    }
+
+    private async Task<bool> SaveAsync()
+    {
+        _notice = null; _error = null; _busy = true;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "game-settings", CancellationToken.None);
+            PalSettingsCatalog.Apply(_fields!, _settings!);
+            await PalSettingsFile.SaveAsync(_rt!.Config.SaveDirectory, _settings!);
+            _notice = "Settings saved. Restart the server to apply them.";
+            return true;
+        }
+        catch (Exception ex) { _error = $"Couldn't save: {ex.Message}"; return false; }
+        finally { _busy = false; }
+    }
+
+    private async Task SaveAndRestartAsync()
+    {
+        if (!await SaveAsync()) return;
+        _busy = true;
+        try
+        {
+            await _rt!.Orchestrator.RestartAsync(_email, [1], CancellationToken.None);
+            _notice = "Settings saved and server restarting.";
+        }
+        catch (Exception ex) { _error = $"Saved, but restart failed: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+}

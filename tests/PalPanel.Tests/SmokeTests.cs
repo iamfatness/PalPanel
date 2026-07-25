@@ -1,10 +1,16 @@
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace PalPanel.Tests;
 
 public class SmokeTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
 {
+    // The seeded "Main" server's id from a built factory (LegacyServerMigration seeds one at
+    // startup from PanelOptions). Per-server pages live under /s/{id}/...
+    private static Guid SeededServerId(WebApplicationFactory<Program> f) =>
+        f.Services.GetRequiredService<PalPanel.Servers.ServerManager>().All().First().Id;
+
     [Fact]
     public async Task Root_RendersOverview_WithAuthDisabled()
     {
@@ -19,10 +25,10 @@ public class SmokeTests(WebApplicationFactory<Program> factory) : IClassFixture<
     [Fact]
     public async Task Players_RendersWithAuthDisabled()
     {
-        var client = factory.WithWebHostBuilder(b =>
+        var f = factory.WithWebHostBuilder(b =>
             b.UseSetting("Panel:AuthDisabled", "true")
-             .UseSetting("Panel:DbPath", Path.GetTempFileName())).CreateClient();
-        var resp = await client.GetAsync("/players");
+             .UseSetting("Panel:DbPath", Path.GetTempFileName()));
+        var resp = await f.CreateClient().GetAsync($"/s/{SeededServerId(f)}/players");
         Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
         var html = await resp.Content.ReadAsStringAsync();
         Assert.Contains("Players", html);
@@ -31,10 +37,10 @@ public class SmokeTests(WebApplicationFactory<Program> factory) : IClassFixture<
     [Fact]
     public async Task History_RendersWithAuthDisabled()
     {
-        var client = factory.WithWebHostBuilder(b =>
+        var f = factory.WithWebHostBuilder(b =>
             b.UseSetting("Panel:AuthDisabled", "true")
-             .UseSetting("Panel:DbPath", Path.GetTempFileName())).CreateClient();
-        var resp = await client.GetAsync("/history");
+             .UseSetting("Panel:DbPath", Path.GetTempFileName()));
+        var resp = await f.CreateClient().GetAsync($"/s/{SeededServerId(f)}/history");
         Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
         var html = await resp.Content.ReadAsStringAsync();
         Assert.Contains("History", html);
@@ -43,23 +49,35 @@ public class SmokeTests(WebApplicationFactory<Program> factory) : IClassFixture<
     [Fact]
     public async Task Backups_RendersWithAuthDisabled()
     {
-        var client = factory.WithWebHostBuilder(b =>
+        var f = factory.WithWebHostBuilder(b =>
             b.UseSetting("Panel:AuthDisabled", "true")
              .UseSetting("Panel:DbPath", Path.GetTempFileName())
-             .UseSetting("Panel:BackupDirectory", Directory.CreateTempSubdirectory().FullName)).CreateClient();
-        var resp = await client.GetAsync("/backups");
+             .UseSetting("Panel:BackupDirectory", Directory.CreateTempSubdirectory().FullName));
+        var resp = await f.CreateClient().GetAsync($"/s/{SeededServerId(f)}/backups");
         Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
         var html = await resp.Content.ReadAsStringAsync();
         Assert.Contains("Backups", html);
     }
 
     [Fact]
-    public async Task Settings_RendersWithAuthDisabled()
+    public async Task PanelSettings_RendersUsersWithAuthDisabled()
     {
         var client = factory.WithWebHostBuilder(b =>
             b.UseSetting("Panel:AuthDisabled", "true")
              .UseSetting("Panel:DbPath", Path.GetTempFileName())).CreateClient();
         var resp = await client.GetAsync("/settings");
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+        var html = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("Users", html);
+    }
+
+    [Fact]
+    public async Task ServerSettings_RendersSchedulesWithAuthDisabled()
+    {
+        var f = factory.WithWebHostBuilder(b =>
+            b.UseSetting("Panel:AuthDisabled", "true")
+             .UseSetting("Panel:DbPath", Path.GetTempFileName()));
+        var resp = await f.CreateClient().GetAsync($"/s/{SeededServerId(f)}/settings");
         Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
         var html = await resp.Content.ReadAsStringAsync();
         Assert.Contains("Schedules", html);
@@ -79,7 +97,7 @@ public class SmokeTests(WebApplicationFactory<Program> factory) : IClassFixture<
         var html = await client.GetStringAsync("/");
         Assert.Contains("dev@localhost", html);
         Assert.Contains("action=\"/auth/logout\"", html);
-        Assert.Contains("Logout", html);
+        Assert.Contains("Sign out", html);
         Assert.Contains("__RequestVerificationToken", html); // antiforgery token rendered in the logout form
     }
 

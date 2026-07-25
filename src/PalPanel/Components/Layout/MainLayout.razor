@@ -3,24 +3,40 @@
 <AuthorizeView>
     <Authorized>
         <div class="app-shell">
-            <nav class="sidebar">
-                <div class="brand">PalPanel</div>
+            <aside class="sidebar">
+                <div class="brand">
+                    <div class="mark">
+                        <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 7l8-4 8 4v10l-8 4-8-4V7z" stroke="#fff" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 3v18M4 7l8 4 8-4" stroke="#fff" stroke-width="1.7" stroke-linejoin="round" opacity=".7"/></svg>
+                    </div>
+                    <div><div class="name">Pal<b>Panel</b></div><div class="tag">Server Ops</div></div>
+                </div>
+
                 <NavMenu />
-            </nav>
+
+                <div class="railfoot">
+                    <div class="who">
+                        <div class="av">@Initials(context.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value)</div>
+                        <div class="meta">
+                            <span class="em">@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value)</span>
+                            <small>@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value)</small>
+                        </div>
+                    </div>
+                    <div class="railactions">
+                        @* Plain HTML onclick (not @@onclick): works without an interactive circuit,
+                           just flips the data-theme attribute via the inline script in App.razor. *@
+                        <button type="button" class="theme-toggle" onclick="palTheme.toggle()" title="Toggle light / dark">◐</button>
+                        <form method="post" action="/auth/logout" class="logout-form">
+                            <AntiforgeryToken />
+                            <button type="submit" class="logout-button">Sign out</button>
+                        </form>
+                    </div>
+                </div>
+            </aside>
 
             <div class="main">
                 <main class="content">
                     @Body
                 </main>
-
-                <footer class="footer">
-                    <span>@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value)</span>
-                    <span class="role">@(context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value)</span>
-                    <form method="post" action="/auth/logout" class="logout-form">
-                        <AntiforgeryToken />
-                        <button type="submit" class="logout-button">Logout</button>
-                    </form>
-                </footer>
             </div>
         </div>
     </Authorized>
@@ -29,7 +45,7 @@
            AllowAnonymous) render their full content via @@Body below -- they bring their
            own .login-shell/.login-card layout, so this branch must not wrap @@Body in any
            sidebar/footer chrome that assumes an authenticated session exists. *@
-        <div class="brand-minimal">PalPanel</div>
+        <div class="brand-minimal">Pal<b>Panel</b></div>
         @Body
     </NotAuthorized>
 </AuthorizeView>
@@ -39,3 +55,16 @@
     <a href="." class="reload">Reload</a>
     <span class="dismiss">🗙</span>
 </div>
+
+@code {
+    // Two-letter avatar initials from the user's email (first char + char after a '.' or '@').
+    private static string Initials(string? email)
+    {
+        if (string.IsNullOrWhiteSpace(email)) return "?";
+        var local = email.Split('@')[0];
+        var parts = local.Split('.', '_', '-').Where(p => p.Length > 0).ToArray();
+        var a = parts.Length > 0 ? parts[0][0] : local[0];
+        var b = parts.Length > 1 ? parts[1][0] : (local.Length > 1 ? local[1] : ' ');
+        return (char.ToUpper(a).ToString() + char.ToUpper(b)).Trim();
+    }
+}

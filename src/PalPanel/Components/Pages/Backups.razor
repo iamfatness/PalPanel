@@ -1,16 +1,22 @@
-@page "/backups"
+@page "/s/{Id:guid}/backups"
 @using PalPanel.Auth
 @using PalPanel.Control
+@using PalPanel.Servers
 @using PalPanel.Supervisor
 @implements IDisposable
-@inject IBackupService BackupSvc
-@inject ProcessSupervisor Sup
+@inject ServerManager Manager
 @inject AuthenticationStateProvider AuthState
 @inject IAdminGuard Guard
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — Backups</PageTitle>
 
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
 <AuthorizeView Roles="Admin">
     <Authorized>
 
@@ -42,7 +48,7 @@
                         <td>@((b.SizeBytes / 1_048_576.0).ToString("0.0"))</td>
                         <td>@b.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
                         <td>
-                            <a href="@($"/backups/download/{b.FileName}")">Download</a>
+                            <a href="@($"/backups/download/{Id}/{b.FileName}")">Download</a>
                             <button disabled="@(_busy || _state != ServerState.Stopped)"
                                     @onclick="() => ConfirmRestoreAsync(b)">Restore</button>
                         </td>
@@ -62,8 +68,12 @@
         <p>Admin access required.</p>
     </NotAuthorized>
 </AuthorizeView>
+}
 
 @code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerRuntime? _rt;
     private IReadOnlyList<BackupInfo> _backups = [];
     private ServerState _state;
     private string _email = "";
@@ -71,10 +81,14 @@
     private string? _error;
     private ConfirmDialog _confirm = null!;
 
+    private IBackupService BackupSvc => _rt!.Backups;
+
     protected override async Task OnInitializedAsync()
     {
-        _state = Sup.State;
-        Sup.StateChanged += OnStateChanged;
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        _state = _rt.Supervisor.State;
+        _rt.Supervisor.StateChanged += OnStateChanged;
         var auth = await AuthState.GetAuthenticationStateAsync();
         _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
         Refresh();
@@ -122,5 +136,5 @@
         finally { _busy = false; }
     }
 
-    public void Dispose() => Sup.StateChanged -= OnStateChanged;
+    public void Dispose() { if (_rt is not null) _rt.Supervisor.StateChanged -= OnStateChanged; }
 }

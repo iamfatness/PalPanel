@@ -1,0 +1,115 @@
+@page "/s/{Id:guid}/messages"
+@using Microsoft.EntityFrameworkCore
+@using PalPanel.Control
+@using PalPanel.Data
+@using PalPanel.Servers
+@inject ServerManager Manager
+@inject IDbContextFactory<PanelDb> DbFactory
+@inject AuthenticationStateProvider AuthState
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Messages</PageTitle>
+
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
+<h1>Messages</h1>
+<p class="sub">Broadcasts sent to <b>@_rt.Config.Name</b>'s in-game chat.</p>
+
+<AuthorizeView Roles="Admin">
+    <Authorized>
+        <div class="send-box">
+            <input @bind="_text" @bind:event="oninput" @onkeydown="OnKeyDown"
+                   placeholder="Type an announcement for everyone on the server..." disabled="@_busy" />
+            <button class="primary" disabled="@(_busy || string.IsNullOrWhiteSpace(_text))" @onclick="SendAsync">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 12l16-8-6 16-3-6-7-2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+                Send announcement
+            </button>
+        </div>
+        @if (_notice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_notice</div>
+        }
+        @if (_error is not null)
+        {
+            <div class="alert">@_error</div>
+        }
+    </Authorized>
+</AuthorizeView>
+
+<div class="section-rule"><h2>History</h2><div class="rule"></div></div>
+
+<table class="data-table">
+    <thead><tr><th>Time</th><th>Sent by</th><th>Message</th></tr></thead>
+    <tbody>
+        @foreach (var m in _history)
+        {
+            <tr>
+                <td>@m.Ts.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                <td>@(m.ActorEmail ?? "system")</td>
+                <td>@m.Detail</td>
+            </tr>
+        }
+        @if (_history.Count == 0)
+        {
+            <tr><td colspan="3">No announcements sent yet.</td></tr>
+        }
+    </tbody>
+</table>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private ServerRuntime? _rt;
+    private List<EventLog> _history = [];
+    private string _text = "";
+    private string _email = "";
+    private bool _busy;
+    private string? _notice;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        await LoadHistoryAsync();
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // "announce" events are the operator broadcasts; EF Sqlite can't order DateTimeOffset
+        // server-side (established pattern), so sort/take client-side over the retention-bounded set.
+        var rows = await db.Events.Where(e => e.ServerId == Id && e.Type == "announce").ToListAsync();
+        _history = rows.OrderByDescending(e => e.Ts).Take(100).ToList();
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_text) && !_busy)
+            await SendAsync();
+    }
+
+    private async Task SendAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_text)) return;
+        _busy = true; _notice = null; _error = null;
+        var message = _text.Trim();
+        try
+        {
+            // AnnounceAsync now throws if the server rejects it, so reaching here means it landed.
+            await _rt!.Orchestrator.AnnounceAsync(_email, message, CancellationToken.None);
+            _notice = "Announcement sent to the server.";
+            _text = "";
+            await LoadHistoryAsync();
+        }
+        catch (Exception ex) { _error = $"Couldn't send: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+}

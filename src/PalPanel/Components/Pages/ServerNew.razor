@@ -1,0 +1,58 @@
+@page "/servers/new"
+@using PalPanel.Auth
+@using PalPanel.Data
+@using PalPanel.Servers
+@inject ServerManager Manager
+@inject AuthenticationStateProvider AuthState
+@inject IAdminGuard Guard
+@inject NavigationManager Nav
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Add server</PageTitle>
+
+<AuthorizeView Roles="Admin">
+    <Authorized>
+        <h1>Add server</h1>
+        @if (_error is not null)
+        {
+            <div class="alert">@_error</div>
+        }
+        <ServerFormFields Model="_model" @bind-Password="_password" />
+        <div class="actions">
+            <button disabled="@_busy" @onclick="SaveAsync">Add server</button>
+            <a href="/">Cancel</a>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <p>Admin access required.</p>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private readonly ServerConfig _model = new() { ProcessName = "PalServer", LaunchArgs = "-publiclobby", ApiBaseUrl = "http://localhost:8212" };
+    private string _password = "";
+    private string _email = "";
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "server-add", CancellationToken.None);
+            if (string.IsNullOrWhiteSpace(_model.Name)) { _error = "Name is required."; return; }
+            if (string.IsNullOrWhiteSpace(_model.ApiBaseUrl)) { _error = "REST API base URL is required."; return; }
+            await Manager.AddAsync(_model, _password);
+            Nav.NavigateTo("/");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

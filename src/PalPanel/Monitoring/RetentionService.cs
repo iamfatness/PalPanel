@@ -38,22 +38,26 @@ public class RetentionService(IDbContextFactory<PanelDb> dbf, ILogger<RetentionS
         // (1) roll raw samples into minute buckets whose end is past the 1h line,
         //     skipping buckets already rolled up.
         var minuteLine = now.AddHours(-1);
+        // Buckets are keyed by (server, time) so each server rolls up independently — otherwise
+        // per-server history queries (which filter by ServerId) find nothing beyond raw samples.
         var existingMinuteBuckets = allRollups
             .Where(r => r.Granularity == "minute")
-            .Select(r => r.Ts)
+            .Select(r => (r.ServerId, r.Ts))
             .ToHashSet();
-        foreach (var group in allSamples.GroupBy(s => TruncateToMinute(s.Ts)))
+        foreach (var group in allSamples.GroupBy(s => (s.ServerId, Bucket: TruncateToMinute(s.Ts))))
         {
-            if (group.Key.AddMinutes(1) > minuteLine) continue;         // incomplete bucket: wait
-            if (existingMinuteBuckets.Contains(group.Key)) continue;    // already rolled up
+            if (group.Key.Bucket.AddMinutes(1) > minuteLine) continue;                     // incomplete bucket: wait
+            if (existingMinuteBuckets.Contains((group.Key.ServerId, group.Key.Bucket))) continue; // already rolled up
             var rollup = new SampleRollup
             {
-                Ts = group.Key,
+                ServerId = group.Key.ServerId,
+                Ts = group.Key.Bucket,
                 Granularity = "minute",
                 AvgPlayers = group.Average(s => s.Players),
                 MaxPlayers = group.Max(s => s.Players),
                 AvgFps = group.Average(s => s.Fps),
                 AvgMemoryBytes = (long)Math.Round(group.Average(s => s.MemoryBytes)),
+                AvgCpu = group.Average(s => s.Cpu),
             };
             db.SampleRollups.Add(rollup);
             allRollups.Add(rollup); // keep in-memory view current for step 3's aggregation below
@@ -75,20 +79,22 @@ public class RetentionService(IDbContextFactory<PanelDb> dbf, ILogger<RetentionS
         //     skipping buckets already rolled up.
         var existingHourBuckets = allRollups
             .Where(r => r.Granularity == "hour")
-            .Select(r => r.Ts)
+            .Select(r => (r.ServerId, r.Ts))
             .ToHashSet();
-        foreach (var group in allRollups.Where(r => r.Granularity == "minute").GroupBy(r => TruncateToHour(r.Ts)))
+        foreach (var group in allRollups.Where(r => r.Granularity == "minute").GroupBy(r => (r.ServerId, Bucket: TruncateToHour(r.Ts))))
         {
-            if (group.Key.AddHours(1) > fortyEightHoursAgo) continue;   // incomplete bucket: wait
-            if (existingHourBuckets.Contains(group.Key)) continue;      // already rolled up
+            if (group.Key.Bucket.AddHours(1) > fortyEightHoursAgo) continue;                 // incomplete bucket: wait
+            if (existingHourBuckets.Contains((group.Key.ServerId, group.Key.Bucket))) continue; // already rolled up
             db.SampleRollups.Add(new SampleRollup
             {
-                Ts = group.Key,
+                ServerId = group.Key.ServerId,
+                Ts = group.Key.Bucket,
                 Granularity = "hour",
                 AvgPlayers = group.Average(r => r.AvgPlayers),
                 MaxPlayers = group.Max(r => r.MaxPlayers),
                 AvgFps = group.Average(r => r.AvgFps),
                 AvgMemoryBytes = (long)Math.Round(group.Average(r => r.AvgMemoryBytes)),
+                AvgCpu = group.Average(r => r.AvgCpu),
             });
         }
         await db.SaveChangesAsync(ct);
