@@ -153,6 +153,16 @@ public class PollerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Tick_ReAdoptsServerStartedOutsideThePanel()
+    {
+        Assert.Equal(ServerState.Stopped, _sup.State);   // panel thinks it's stopped
+        _launcher.Existing = new FakeProcess();          // a process appears (e.g. relaunched via Steam)
+        await _poller.TickServerAsync(_rt, default);
+        Assert.Equal(ServerState.Running, _sup.State);   // panel picks it up and starts watching
+        Assert.True(Snap.Current.ApiReachable);          // and polls it
+    }
+
+    [Fact]
     public async Task AutoRestart_TriggersOnMemoryBlowup_WhenEnabled()
     {
         _launcher.WorkingSetByName = 5_000_000_000; // 5 GB real process

@@ -70,6 +70,17 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
 
         var sup = rt.Supervisor;
         var state = sup.State;
+
+        // A server started OUTSIDE the panel (e.g. relaunched via Steam after a panel stop) should
+        // be picked up so the panel reflects reality and — crucially — starts watching it for
+        // crashes. AdoptExistingIfRunning only acts when Stopped/Held, so this is a no-op otherwise
+        // and adopts at most once (state flips to Running).
+        if (state is ServerState.Stopped or ServerState.Held)
+        {
+            sup.AdoptExistingIfRunning();
+            state = sup.State;
+        }
+
         if (state is ServerState.Stopped or ServerState.Held or ServerState.Stopping)
         {
             st.PrevCpu = null; // reset the CPU baseline so a fresh run starts clean
