@@ -24,6 +24,19 @@ public static class SchemaUpgrade
 
     public static async Task ApplyAsync(PanelDb db, CancellationToken ct = default)
     {
+        // BannedPlayers table (added after multi-server; created here for existing DBs).
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "BannedPlayers" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_BannedPlayers" PRIMARY KEY AUTOINCREMENT,
+                "ServerId" TEXT NOT NULL,
+                "UserId" TEXT NOT NULL DEFAULT '',
+                "Name" TEXT NOT NULL DEFAULT '',
+                "Reason" TEXT NOT NULL DEFAULT '',
+                "BannedBy" TEXT NULL,
+                "BannedAt" TEXT NOT NULL
+            );
+            """, ct);
+
         // Servers table (EF maps Guid/string -> TEXT, int -> INTEGER, bool -> INTEGER).
         await db.Database.ExecuteSqlRawAsync("""
             CREATE TABLE IF NOT EXISTS "Servers" (

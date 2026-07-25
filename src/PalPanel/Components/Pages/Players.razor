@@ -9,6 +9,7 @@
 @inject ServerManager Manager
 @inject AuthenticationStateProvider AuthState
 @inject IDbContextFactory<PanelDb> DbFactory
+@inject BanService Bans
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — Players</PageTitle>
@@ -37,8 +38,8 @@ else
         @foreach (var p in _s.Players)
         {
             <tr>
-                <td>@p.Name</td>
-                <td>@p.UserId</td>
+                <td><a href="@($"/s/{Id}/players/{p.UserId}")">@p.Name</a></td>
+                <td class="mono">@p.UserId</td>
                 <td>@p.Level</td>
                 <td>@p.Ping</td>
                 <AuthorizeView Roles="Admin">
@@ -65,7 +66,7 @@ else
         @foreach (var s in _recentSessions)
         {
             <tr>
-                <td>@s.Name</td>
+                <td><a href="@($"/s/{Id}/players/{s.UserId}")">@s.Name</a></td>
                 <td>@s.JoinedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
                 <td>@(s.LeftAt is null ? "online" : s.LeftAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))</td>
                 <td>@FormatDuration((s.LeftAt ?? DateTimeOffset.UtcNow) - s.JoinedAt)</td>
@@ -84,7 +85,7 @@ else
     <tbody>
         @foreach (var t in _totalPlaytime)
         {
-            <tr><td>@t.Name</td><td>@t.UserId</td><td>@FormatDuration(t.Total)</td></tr>
+            <tr><td><a href="@($"/s/{Id}/players/{t.UserId}")">@t.Name</a></td><td class="mono">@t.UserId</td><td>@FormatDuration(t.Total)</td></tr>
         }
         @if (_totalPlaytime.Count == 0)
         {
@@ -92,6 +93,30 @@ else
         }
     </tbody>
 </table>
+
+<AuthorizeView Roles="Admin"><Authorized>
+    <div class="section-rule"><h2>Banned players</h2><div class="rule"></div></div>
+    <p class="sub">Bans issued through the panel. Bans made directly on the server aren't listed here yet.</p>
+    <table class="data-table">
+        <thead><tr><th>Name</th><th>Reason</th><th>Banned by</th><th>When</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var b in _bans)
+            {
+                <tr>
+                    <td><a href="@($"/s/{Id}/players/{b.UserId}")">@b.Name</a></td>
+                    <td>@(string.IsNullOrWhiteSpace(b.Reason) ? "—" : b.Reason)</td>
+                    <td>@(b.BannedBy ?? "—")</td>
+                    <td>@b.BannedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td><button disabled="@_busy" @onclick="() => UnbanAsync(b)">Unban</button></td>
+                </tr>
+            }
+            @if (_bans.Count == 0)
+            {
+                <tr><td colspan="5">No panel-issued bans.</td></tr>
+            }
+        </tbody>
+    </table>
+</Authorized></AuthorizeView>
 
 <ConfirmDialog @ref="_confirm" />
 }
@@ -107,6 +132,7 @@ else
     private string? _error;
     private List<PlayerSession> _recentSessions = [];
     private List<(string UserId, string Name, TimeSpan Total)> _totalPlaytime = [];
+    private IReadOnlyList<BannedPlayer> _bans = [];
 
     private IServerOrchestrator Orch => _rt!.Orchestrator;
 
@@ -119,6 +145,7 @@ else
         var auth = await AuthState.GetAuthenticationStateAsync();
         _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
         await LoadSessionsAsync();
+        _bans = await Bans.ListAsync(Id);
     }
 
     private void OnSnapshot(ServerSnapshot s)
@@ -152,8 +179,30 @@ else
 
     private async Task ConfirmBan(PlayerInfo p)
     {
-        if (await _confirm.Show($"Ban {p.Name}?", "The player will be permanently banned from the server."))
-            await Do(() => Orch.BanAsync(_email, p.UserId, p.Name, CancellationToken.None));
+        if (!await _confirm.Show($"Ban {p.Name}?", "The player will be banned from the server. Add a reason on their detail page."))
+            return;
+        _busy = true; _error = null;
+        try
+        {
+            await Orch.BanAsync(_email, p.UserId, p.Name, CancellationToken.None);
+            await Bans.RecordAsync(Id, p.UserId, p.Name, "", _email);   // quick ban: no reason
+            _bans = await Bans.ListAsync(Id);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task UnbanAsync(BannedPlayer b)
+    {
+        _busy = true; _error = null;
+        try
+        {
+            await Orch.UnbanAsync(_email, b.UserId, b.Name, CancellationToken.None);
+            await Bans.RemoveAsync(Id, b.UserId);
+            _bans = await Bans.ListAsync(Id);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
     }
 
     private async Task Do(Func<Task> action)

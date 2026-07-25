@@ -1,0 +1,167 @@
+@page "/s/{Id:guid}/players/{UserId}"
+@using Microsoft.EntityFrameworkCore
+@using PalPanel.Control
+@using PalPanel.Data
+@using PalPanel.Monitoring
+@using PalPanel.Servers
+@using PalPanel.Supervisor
+@implements IDisposable
+@inject ServerManager Manager
+@inject IDbContextFactory<PanelDb> DbFactory
+@inject BanService Bans
+@inject AuthenticationStateProvider AuthState
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — @_name</PageTitle>
+
+@if (_rt is null)
+{
+    <ServerNotFound />
+}
+else
+{
+<div class="page-head">
+    <div>
+        <h1>@_name</h1>
+        <div class="sub"><span class="mono">@UserId</span> &middot; <a href="@($"/s/{Id}/players")">back to players</a></div>
+    </div>
+</div>
+
+@if (_error is not null) { <div class="alert">@_error</div> }
+@if (_notice is not null) { <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_notice</div> }
+
+<div class="stats-row">
+    <div class="stat-card"><div class="stat-label">Status</div><div class="stat-value" style="@(_online ? "color:var(--online)" : "")">@(_online ? "Online" : "Offline")</div></div>
+    <div class="stat-card"><div class="stat-label">Total playtime</div><div class="stat-value">@FormatDuration(_totalPlaytime)</div></div>
+    <div class="stat-card"><div class="stat-label">Sessions</div><div class="stat-value">@_sessions.Count</div></div>
+    <div class="stat-card"><div class="stat-label">Ban</div><div class="stat-value" style="@(_ban is not null ? "color:var(--down)" : "")">@(_ban is not null ? "Banned" : "None")</div></div>
+</div>
+
+<AuthorizeView Roles="Admin"><Authorized>
+    <div class="section-rule"><h2>Moderation</h2><div class="rule"></div></div>
+    @if (_ban is not null)
+    {
+        <div class="banner" style="--warn:var(--down); background:var(--bad-wash); border-color:color-mix(in srgb,var(--down) 30%,transparent); color:color-mix(in srgb,var(--down) 75%,var(--ink))">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/><path d="M5.5 5.5l13 13" stroke="currentColor" stroke-width="1.7"/></svg>
+            Banned @(_ban.BannedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")) by @(_ban.BannedBy ?? "unknown")@(string.IsNullOrWhiteSpace(_ban.Reason) ? "" : $" — {_ban.Reason}")
+        </div>
+        <div class="actions">
+            <button class="danger" disabled="@_busy" @onclick="UnbanAsync">Unban</button>
+        </div>
+    }
+    else
+    {
+        <div class="send-box">
+            <input @bind="_reason" @bind:event="oninput" placeholder="Reason (optional) — recorded with the ban" disabled="@_busy" />
+            <button class="danger" disabled="@_busy" @onclick="BanAsync">Ban player</button>
+        </div>
+        @if (_online)
+        {
+            <div class="actions"><button disabled="@_busy" @onclick="KickAsync">Kick from server</button></div>
+        }
+    }
+</Authorized></AuthorizeView>
+
+<div class="section-rule"><h2>Session history</h2><div class="rule"></div></div>
+<table class="data-table">
+    <thead><tr><th>Joined</th><th>Left</th><th>Duration</th></tr></thead>
+    <tbody>
+        @foreach (var s in _sessions)
+        {
+            <tr>
+                <td>@s.JoinedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                <td>@(s.LeftAt is null ? "online" : s.LeftAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))</td>
+                <td>@FormatDuration((s.LeftAt ?? DateTimeOffset.UtcNow) - s.JoinedAt)</td>
+            </tr>
+        }
+        @if (_sessions.Count == 0) { <tr><td colspan="3">No sessions recorded for this player.</td></tr> }
+    </tbody>
+</table>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    [Parameter] public string UserId { get; set; } = "";
+
+    private ServerRuntime? _rt;
+    private List<PlayerSession> _sessions = [];
+    private BannedPlayer? _ban;
+    private TimeSpan _totalPlaytime;
+    private string _name = "";
+    private bool _online;
+    private string _email = "";
+    private string _reason = "";
+    private bool _busy;
+    private string? _error;
+    private string? _notice;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _rt = Manager.Get(Id);
+        if (_rt is null) return;
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        _rt.Snapshot.Changed += OnSnapshot;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var all = await db.Sessions.Where(s => s.ServerId == Id && s.UserId == UserId).ToListAsync();
+        _sessions = all.OrderByDescending(s => s.JoinedAt).ToList();
+        var now = DateTimeOffset.UtcNow;
+        _totalPlaytime = TimeSpan.FromTicks(all.Sum(s => ((s.LeftAt ?? now) - s.JoinedAt).Ticks));
+        _name = _sessions.FirstOrDefault()?.Name ?? UserId;
+        _ban = await Bans.GetAsync(Id, UserId);
+        _online = _rt!.Snapshot.Current.Players.Any(p => p.UserId == UserId);
+    }
+
+    private void OnSnapshot(ServerSnapshot s) =>
+        InvokeAsync(() => { _online = s.Players.Any(p => p.UserId == UserId); StateHasChanged(); });
+
+    private async Task BanAsync()
+    {
+        _busy = true; _error = null; _notice = null;
+        try
+        {
+            await _rt!.Orchestrator.BanAsync(_email, UserId, _name, CancellationToken.None);
+            await Bans.RecordAsync(Id, UserId, _name, _reason.Trim(), _email);
+            _reason = ""; _notice = $"{_name} banned.";
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = $"Couldn't ban: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private async Task UnbanAsync()
+    {
+        _busy = true; _error = null; _notice = null;
+        try
+        {
+            await _rt!.Orchestrator.UnbanAsync(_email, UserId, _name, CancellationToken.None);
+            await Bans.RemoveAsync(Id, UserId);
+            _notice = $"{_name} unbanned.";
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = $"Couldn't unban: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private async Task KickAsync()
+    {
+        _busy = true; _error = null; _notice = null;
+        try
+        {
+            await _rt!.Orchestrator.KickAsync(_email, UserId, _name, CancellationToken.None);
+            _notice = $"{_name} kicked.";
+        }
+        catch (Exception ex) { _error = $"Couldn't kick: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private static string FormatDuration(TimeSpan t) =>
+        t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h {t.Minutes}m" : $"{(int)t.TotalHours}h {t.Minutes}m";
+
+    public void Dispose() { if (_rt is not null) _rt.Snapshot.Changed -= OnSnapshot; }
+}

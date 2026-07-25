@@ -193,6 +193,7 @@ input::placeholder { color: var(--ink-3); }
 .send-box input { flex: 1; min-width: 0; }
 .notice { display: flex; align-items: center; gap: 9px; padding: 10px 13px; border-radius: var(--radius-sm); margin-bottom: 1rem; font-size: 13.5px; background: var(--ok-wash); border: 1px solid color-mix(in srgb, var(--online) 32%, transparent); color: color-mix(in srgb, var(--online) 78%, var(--ink)); }
 .notice svg { width: 15px; height: 15px; color: var(--online); flex: none; }
+.mono { font-family: var(--mono); font-size: .9em; color: var(--ink-2); }
 
 /* ===================== Tables ===================== */
 .data-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 1.5rem; box-shadow: var(--shadow-sm); }

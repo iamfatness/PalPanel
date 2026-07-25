@@ -23,6 +23,7 @@ public class SchedulerTests
         public Task AnnounceAsync(string actor, string message, CancellationToken ct) => Task.CompletedTask;
         public Task KickAsync(string actor, string userId, string name, CancellationToken ct) => Task.CompletedTask;
         public Task BanAsync(string actor, string userId, string name, CancellationToken ct) => Task.CompletedTask;
+        public Task UnbanAsync(string actor, string userId, string name, CancellationToken ct) => Task.CompletedTask;
     }
 
     private class ThrowingOrchestrator : IServerOrchestrator
@@ -35,6 +36,7 @@ public class SchedulerTests
         public Task AnnounceAsync(string actor, string message, CancellationToken ct) => Task.CompletedTask;
         public Task KickAsync(string actor, string userId, string name, CancellationToken ct) => Task.CompletedTask;
         public Task BanAsync(string actor, string userId, string name, CancellationToken ct) => Task.CompletedTask;
+        public Task UnbanAsync(string actor, string userId, string name, CancellationToken ct) => Task.CompletedTask;
     }
 
     private class FakeBackup : IBackupService

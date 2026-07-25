@@ -8,6 +8,7 @@ public class PanelDb(DbContextOptions<PanelDb> options) : DbContext(options)
     public DbSet<Sample> Samples => Set<Sample>();
     public DbSet<SampleRollup> SampleRollups => Set<SampleRollup>();
     public DbSet<PlayerSession> Sessions => Set<PlayerSession>();
+    public DbSet<BannedPlayer> BannedPlayers => Set<BannedPlayer>();
     public DbSet<EventLog> Events => Set<EventLog>();
     public DbSet<PanelUser> Users => Set<PanelUser>();
     public DbSet<Schedule> Schedules => Set<Schedule>();
@@ -20,6 +21,7 @@ public class PanelDb(DbContextOptions<PanelDb> options) : DbContext(options)
         b.Entity<SampleRollup>().HasIndex(r => new { r.ServerId, r.Granularity, r.Ts });
         b.Entity<PanelUser>().HasIndex(u => u.Email).IsUnique();
         b.Entity<PlayerSession>().HasIndex(s => new { s.ServerId, s.UserId });
+        b.Entity<BannedPlayer>().HasIndex(x => new { x.ServerId, x.UserId }).IsUnique();
         b.Entity<EventLog>().HasIndex(e => new { e.ServerId, e.Ts });
         b.Entity<Schedule>().HasIndex(s => s.ServerId);
     }

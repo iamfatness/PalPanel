@@ -40,6 +40,7 @@ builder.Services.AddSingleton<PalPanel.Data.IEventSink, PalPanel.Data.DbEventSin
 builder.Services.AddSingleton<PalPanel.Auth.IAdminGuard, PalPanel.Auth.AdminGuard>();
 builder.Services.AddSingleton<PalPanel.Auth.IPasswordService, PalPanel.Auth.PasswordService>();
 builder.Services.AddSingleton<PalPanel.Auth.IUserAdminService, PalPanel.Auth.UserAdminService>();
+builder.Services.AddSingleton<PalPanel.Control.BanService>();
 
 // Multi-server core: ServerManager owns the per-server runtimes; it is the IServerRegistry the
 // poller/scheduler/UI resolve servers through.

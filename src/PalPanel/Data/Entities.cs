@@ -60,6 +60,19 @@ public class PlayerSession
     public DateTimeOffset? LeftAt { get; set; }
 }
 
+// A ban the panel issued: the authoritative current list lives in the server's banlist.txt
+// (SteamIDs only), so we keep this to carry the name + reason + who/when for panel-issued bans.
+public class BannedPlayer
+{
+    public long Id { get; set; }
+    public Guid ServerId { get; set; }
+    public string UserId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Reason { get; set; } = "";
+    public string? BannedBy { get; set; }
+    public DateTimeOffset BannedAt { get; set; }
+}
+
 public class EventLog
 {
     public long Id { get; set; }
