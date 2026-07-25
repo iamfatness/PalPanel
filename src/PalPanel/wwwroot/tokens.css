@@ -67,20 +67,11 @@
     --shadow-sm:0 6px 18px -10px rgba(0,0,0,.6);
 }
 
-/* Light theme: honor OS preference unless the viewer forced dark. */
-@media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-        --void:#E6EAF2; --bg:#F3F5FA; --panel:#FFFFFF; --panel-2:#F1F4FA; --panel-3:#E7ECF5;
-        --line:#DCE2ED; --line-soft:#E8ECF4;
-        --ink:#121828; --ink-2:#54617C; --ink-3:#8A94AC;
-        --azure:#2C74E0; --azure-bright:#1D63CC; --violet:#6B5CE0; --amber:#B9781C;
-        --online:#12A063; --warn:#C0871A; --down:#D6483C; --ring-track:#E3E8F1;
-        --shadow:0 1px 2px rgba(16,24,40,.06), 0 12px 30px -16px rgba(16,24,40,.18);
-        --shadow-sm:0 4px 14px -8px rgba(16,24,40,.18);
-    }
-}
-
-/* Explicit light choice wins over OS preference. */
+/* Night Ops is dark-committed: the base :root above is always dark, regardless of the OS
+   color scheme. This is deliberate (a mission-control console) and, importantly, keeps the
+   theme deterministic — following prefers-color-scheme made the theme flip whenever Blazor
+   briefly dropped the data-theme attribute on re-render. Light is strictly opt-in via the
+   toggle (data-theme="light"). */
 :root[data-theme="light"] {
     --void:#E6EAF2; --bg:#F3F5FA; --panel:#FFFFFF; --panel-2:#F1F4FA; --panel-3:#E7ECF5;
     --line:#DCE2ED; --line-soft:#E8ECF4;
