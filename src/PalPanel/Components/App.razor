@@ -5,6 +5,41 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
+
+    @* Critical inline theme: paints the correct background on the FIRST frame, before the
+       external stylesheets (and web fonts) finish loading — otherwise the unstyled page flashes
+       white, which reads as a random light-mode flicker on refresh. *@
+    <style>
+        html { background: #0C111F; color: #EAEEF9; }
+        @@media (prefers-color-scheme: light) { html:not([data-theme="dark"]) { background: #F3F5FA; color: #121828; } }
+        :root[data-theme="light"] { background: #F3F5FA; color: #121828; }
+        :root[data-theme="dark"] { background: #0C111F; color: #EAEEF9; }
+    </style>
+    <script>
+        // Define + apply the theme synchronously in <head> so data-theme is set before first
+        // paint. Re-applied on Blazor enhanced navigation, which would otherwise diff the
+        // <html> element back to the server markup and drop the attribute (the flicker).
+        window.palTheme = {
+            apply: function () {
+                try {
+                    var t = localStorage.getItem('palpanel-theme');
+                    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+                    else document.documentElement.removeAttribute('data-theme'); // follow OS preference
+                } catch (e) { /* storage blocked; OS preference governs */ }
+            },
+            toggle: function () {
+                var cur = document.documentElement.getAttribute('data-theme');
+                if (!cur) cur = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                var next = cur === 'dark' ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                try { localStorage.setItem('palpanel-theme', next); } catch (e) { }
+                return next;
+            }
+        };
+        palTheme.apply();
+        document.addEventListener('blazor:enhancedload', function () { palTheme.apply(); });
+    </script>
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
@@ -13,27 +48,6 @@
     <link rel="stylesheet" href="tokens.css?v=@AssetVer" />
     <link rel="stylesheet" href="app.css?v=@AssetVer" />
     <link rel="stylesheet" href="PalPanel.styles.css?v=@AssetVer" />
-    <script>
-        // Apply the persisted theme choice before first paint to avoid a flash. An absent
-        // choice leaves prefers-color-scheme in control (no data-theme attribute).
-        (function () {
-            try {
-                var t = localStorage.getItem('palpanel-theme');
-                if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-            } catch (e) { /* storage blocked; fall back to OS preference */ }
-        })();
-        window.palTheme = {
-            toggle: function () {
-                var cur = document.documentElement.getAttribute('data-theme');
-                // Resolve the effective theme first so the first toggle always flips visibly.
-                if (!cur) cur = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-                var next = cur === 'dark' ? 'light' : 'dark';
-                document.documentElement.setAttribute('data-theme', next);
-                try { localStorage.setItem('palpanel-theme', next); } catch (e) { }
-                return next;
-            }
-        };
-    </script>
     <HeadOutlet />
 </head>
 

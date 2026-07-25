@@ -18,8 +18,13 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
     {
         public Dictionary<string, (long SessionId, string Name)> Online = [];
         public bool ApiWasReachable = true;
+        public int ConsecutiveApiFailures;
         public bool Reconciled;
     }
+
+    // A single failed poll (a transient Palworld API stall) is tolerated; the UI is only marked
+    // unreachable after this many consecutive failures, which stops the status from flapping.
+    private const int UnreachableThreshold = 2;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -61,11 +66,18 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
         }
 
         var info = await rt.Api.GetInfoAsync(ct);
-        var reachable = info is not null;
-        var players = reachable ? await rt.Api.GetPlayersAsync(ct) : [];
-        var metrics = reachable ? await rt.Api.GetMetricsAsync(ct) : null;
+        var rawReachable = info is not null;
+        st.ConsecutiveApiFailures = rawReachable ? 0 : st.ConsecutiveApiFailures + 1;
 
-        if (reachable && state == ServerState.Starting) { sup.MarkRunning(); state = sup.State; }
+        // Hysteresis: report unreachable only after repeated failures, so one stalled poll
+        // (common with Palworld's game-thread API) doesn't flap the status true<->false.
+        var reachable = rawReachable || st.ConsecutiveApiFailures < UnreachableThreshold;
+
+        // Only fetch/sample real data when the API actually answered this tick.
+        var players = rawReachable ? await rt.Api.GetPlayersAsync(ct) : [];
+        var metrics = rawReachable ? await rt.Api.GetMetricsAsync(ct) : null;
+
+        if (rawReachable && state == ServerState.Starting) { sup.MarkRunning(); state = sup.State; }
         if (!reachable && state == ServerState.Running && st.ApiWasReachable)
             await rt.Events.LogAsync("api-unreachable", "Process alive but REST API not answering");
         if (reachable && !st.ApiWasReachable)
@@ -75,7 +87,7 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
         rt.Snapshot.Publish(new ServerSnapshot(state, reachable, info, players, metrics,
             sup.CurrentMemoryBytes, sup.RunningSince, DateTimeOffset.UtcNow));
 
-        if (state == ServerState.Running && reachable)
+        if (state == ServerState.Running && rawReachable)
         {
             await using var db = await dbf.CreateDbContextAsync(ct);
             db.Samples.Add(new Sample

@@ -127,6 +127,22 @@ public class PollerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SingleFailedPoll_IsToleratedBeforeMarkingUnreachable()
+    {
+        await _sup.StartAsync(default);
+        await _poller.TickServerAsync(_rt, default);   // reachable
+        _stub.Healthy = false;
+        await _poller.TickServerAsync(_rt, default);    // 1st failure — hysteresis tolerates it
+        Assert.True(Snap.Current.ApiReachable);         // not yet flapped to unreachable
+        using (var db1 = _dbf.CreateDbContext())
+            Assert.Empty(db1.Events.Where(e => e.Type == "api-unreachable"));
+        await _poller.TickServerAsync(_rt, default);    // 2nd consecutive failure — now unreachable
+        Assert.False(Snap.Current.ApiReachable);
+        using var db = _dbf.CreateDbContext();
+        Assert.Equal(1, db.Events.Count(e => e.Type == "api-unreachable"));
+    }
+
+    [Fact]
     public async Task OneServerDown_DoesNotStallAnother()
     {
         // Reachable server (the stub) and an unreachable server (throwing API). Ticking both

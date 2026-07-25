@@ -17,7 +17,10 @@ public class PalApiClient : IPalApi
     {
         _http = http;
         _http.BaseAddress = new Uri(settings.BaseUrl.TrimEnd('/') + "/v1/api/");
-        _http.Timeout = TimeSpan.FromSeconds(5);
+        // Palworld's REST API runs on the game thread and periodically stalls (world saves, load
+        // spikes). A tight timeout turns those transient stalls into false "API unreachable"
+        // flapping, so allow generous headroom; the poller adds hysteresis on top.
+        _http.Timeout = TimeSpan.FromSeconds(12);
         var cred = Convert.ToBase64String(Encoding.UTF8.GetBytes($"admin:{settings.AdminPassword}"));
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", cred);
     }
