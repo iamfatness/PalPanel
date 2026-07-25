@@ -77,6 +77,10 @@ else
                                 @f.Label
                                 <input type="text" @bind="f.Value" />
                             }
+                            @if (OverrideNote(f) is { } note)
+                            {
+                                <span class="field-note">@note</span>
+                            }
                         </label>
                     }
                 </div>
@@ -116,6 +120,18 @@ else
 
     private static void SetBool(PalSettingField f, ChangeEventArgs e) =>
         f.Value = e.Value is true ? "True" : "False";
+
+    // Some ini settings are overridden by launch arguments at runtime (max players by -players,
+    // etc.), so the ini value here isn't what the server is actually using. Surface the effective
+    // value from the live server so the editor isn't misleading.
+    private string? OverrideNote(PalSettingField f)
+    {
+        if (f.Key == "ServerPlayerMaxNum"
+            && _rt?.Snapshot.Current.Metrics?.MaxPlayerNum is { } running
+            && int.TryParse(f.Value, out var ini) && running != ini)
+            return $"⚠ Running server is using {running} (a launch argument like -players overrides this). Change it in your launch options, not here.";
+        return null;
+    }
 
     private async Task LoadAsync()
     {
