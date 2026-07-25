@@ -46,6 +46,17 @@ public class AlertSettingsServiceTests
     }
 
     [Fact]
+    public async Task Save_StripsWhitespaceFromAppPassword()
+    {
+        var dbf = NewDb();
+        var svc = Make(dbf);
+        // Gmail displays app passwords as four space-separated groups; a copy-paste must still work.
+        await svc.SaveAsync(new AlertSettings { SmtpUser = "u", To = "t" }, "abcd efgh ijkl mnop");
+        var r = await svc.ResolveAsync();
+        Assert.Equal("abcdefghijklmnop", r.SmtpPassword);
+    }
+
+    [Fact]
     public async Task Save_BlankPassword_KeepsExistingSecret()
     {
         var svc = Make(NewDb());

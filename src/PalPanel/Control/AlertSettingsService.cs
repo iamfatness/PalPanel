@@ -64,7 +64,10 @@ public class AlertSettingsService(
         row.From = form.From.Trim();
         row.To = form.To.Trim();
         if (!string.IsNullOrWhiteSpace(newPassword))
-            row.SmtpPasswordEnc = protector.Protect(newPassword);
+            // Gmail app passwords are shown as four space-separated groups ("abcd efgh ijkl mnop"),
+            // but SMTP AUTH needs the literal 16 chars — strip whitespace so a copy-paste with the
+            // display spacing still authenticates instead of failing with 5.7.0.
+            row.SmtpPasswordEnc = protector.Protect(new string(newPassword.Where(c => !char.IsWhiteSpace(c)).ToArray()));
         await db.SaveChangesAsync(ct);
     }
 
