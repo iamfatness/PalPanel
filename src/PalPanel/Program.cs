@@ -44,6 +44,13 @@ builder.Services.AddSingleton<PalPanel.Control.BanService>();
 builder.Services.AddSingleton<PalPanel.Control.SteamCmdService>();
 builder.Services.AddSingleton<PalPanel.Control.ReachabilityService>();
 
+// Crash/health alerting: in-panel feed (AlertService -> DB) + optional email (SmtpAlertNotifier).
+// Email config ("Alerts" section) lives in the gitignored appsettings.Local.json; the SMTP app
+// password is a secret and is never committed. Unconfigured => in-panel only.
+builder.Services.Configure<PalPanel.Control.AlertOptions>(builder.Configuration.GetSection("Alerts"));
+builder.Services.AddSingleton<PalPanel.Control.IAlertNotifier, PalPanel.Control.SmtpAlertNotifier>();
+builder.Services.AddSingleton<PalPanel.Control.AlertService>();
+
 // Multi-server core: ServerManager owns the per-server runtimes; it is the IServerRegistry the
 // poller/scheduler/UI resolve servers through.
 builder.Services.AddSingleton<PalPanel.Servers.ServerManager>();

@@ -52,6 +52,14 @@ exposed at `panel.iamfatness.us` via a Cloudflare Tunnel. .NET 8 Blazor Server, 
   and fixed disks (DriveInfo) via guarded Win32 — degrades to null/empty, never throws into the UI.
 - Schedules support `restart`, `backup`, and `announce` (message in `Schedule.Parameters`, broadcast
   via `Orchestrator.AnnounceAsync(AdminGuard.SchedulerActor, …)`).
+- **Alerts** (`/alerts`, panel-level, `AlertService`): crash/health alerting with an in-panel feed +
+  unread nav badge, plus optional email. `AlertingEventSink` decorates each server's event sink and
+  maps notable events → alerts (crash/held/restart-failed → `server-down`, api-unreachable/recovered
+  → `reachable`, auto-restart/backup-failed → notifications); the poller adds host low-disk alerts.
+  Condition alerts dedup/escalate per `(ServerId, Key)` so a loop yields one evolving alert, not a
+  storm. Email (`SmtpAlertNotifier`) sends Warning+Critical only; Info is in-panel only. SMTP config
+  is the gitignored `Alerts` section (app password never committed); unconfigured = in-panel only.
+  All alert DB predicates avoid `DateTimeOffset` comparisons (SQLite can't translate them).
 - Per-server pages resolve `ServerManager.Get(Id)` and render `<ServerNotFound />` if null.
 - Design tokens in `wwwroot/tokens.css` (dark-first + light via `prefers-color-scheme` and an
   explicit `[data-theme]` toggle); component styles in `app.css`. Charts read colors from tokens.

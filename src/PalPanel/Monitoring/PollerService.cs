@@ -9,10 +9,16 @@ namespace PalPanel.Monitoring;
 // reconciliation) is keyed by server id. A failure polling one server is caught and logged to
 // that server's event log; it never stalls the others or kills the loop.
 public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf,
-    ILogger<PollerService>? log = null) : BackgroundService
+    ILogger<PollerService>? log = null, PalPanel.Control.AlertService? alerts = null) : BackgroundService
 {
     private readonly ILogger _log = log ?? NullLogger<PollerService>.Instance;
     private readonly ConcurrentDictionary<Guid, PollState> _state = new();
+
+    // Raise a low-disk alert when a fixed drive drops below this share of free space (critical
+    // below the tighter bound). Server crash/health alerts come from the event pipeline; disk is
+    // host-level, so the poller checks it directly each tick.
+    private const double DiskLowFreePercent = 10.0;
+    private const double DiskCriticalFreePercent = 3.0;
 
     private sealed class PollState
     {
@@ -53,6 +59,12 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
                     { _log.LogError(sinkEx, "Event sink write failed for poller-error on {Server}: {Detail}", rt.Id, ex.Message); }
                 }
             }
+            if (alerts is not null)
+            {
+                try { await CheckDisksAsync(ct); }
+                catch (Exception ex) { _log.LogError(ex, "Disk-space alert check failed"); }
+            }
+
             // Base cadence = the shortest configured interval among live servers (fallback 10s);
             // every server is polled each tick. Keeps the shared loop simple and responsive.
             var interval = runtimes.Count == 0 ? 10 : runtimes.Min(r => Math.Max(1, r.Config.PollIntervalSeconds));
@@ -176,6 +188,29 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
         // an unreachable server can't relay them anyway.
         try { await rt.Orchestrator.RestartAsync(PalPanel.Auth.AdminGuard.SchedulerActor, null, CancellationToken.None); }
         catch (Exception ex) { try { await rt.Events.LogAsync("auto-restart-failed", ex.Message); } catch { } }
+    }
+
+    // Host-level low-disk alerting. Dedup in AlertService means one alert per drive per episode;
+    // recovery silently resolves it. Guarded by the caller so it's off when no AlertService is wired.
+    private async Task CheckDisksAsync(CancellationToken ct)
+    {
+        foreach (var d in PalPanel.Control.HostStats.Disks())
+        {
+            var freePct = d.TotalBytes > 0 ? (double)d.FreeBytes / d.TotalBytes * 100.0 : 100.0;
+            var key = "disk:" + d.Name;
+            if (freePct < DiskLowFreePercent)
+            {
+                var sev = freePct < DiskCriticalFreePercent
+                    ? PalPanel.Data.AlertSeverity.Critical : PalPanel.Data.AlertSeverity.Warning;
+                await alerts!.RaiseAsync(null, "host", key, sev,
+                    $"Low disk space on {d.Name.TrimEnd('\\')}",
+                    $"{PalPanel.Control.HostStats.FormatBytes(d.FreeBytes)} free ({freePct:0.#}%) of {PalPanel.Control.HostStats.FormatBytes(d.TotalBytes)}", ct);
+            }
+            else
+            {
+                await alerts!.ResolveAsync(null, key, null, ct);
+            }
+        }
     }
 
     private async Task DiffSessionsAsync(ServerRuntime rt, PollState st, IReadOnlyList<PlayerInfo> players)

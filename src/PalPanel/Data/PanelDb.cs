@@ -12,6 +12,7 @@ public class PanelDb(DbContextOptions<PanelDb> options) : DbContext(options)
     public DbSet<EventLog> Events => Set<EventLog>();
     public DbSet<PanelUser> Users => Set<PanelUser>();
     public DbSet<Schedule> Schedules => Set<Schedule>();
+    public DbSet<Alert> Alerts => Set<Alert>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -24,6 +25,9 @@ public class PanelDb(DbContextOptions<PanelDb> options) : DbContext(options)
         b.Entity<BannedPlayer>().HasIndex(x => new { x.ServerId, x.UserId }).IsUnique();
         b.Entity<EventLog>().HasIndex(e => new { e.ServerId, e.Ts });
         b.Entity<Schedule>().HasIndex(s => s.ServerId);
+        // The alerts feed sorts newest-first and the badge counts un-acknowledged; dedup/resolve
+        // looks up the active alert per (ServerId, Key).
+        b.Entity<Alert>().HasIndex(a => new { a.ServerId, a.Key, a.ResolvedAt });
     }
 }
 

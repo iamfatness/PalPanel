@@ -1,0 +1,92 @@
+@page "/alerts"
+@using PalPanel.Auth
+@using PalPanel.Control
+@using PalPanel.Data
+@inject AlertService AlertSvc
+@inject IAdminGuard Guard
+@inject AuthenticationStateProvider AuthState
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Alerts</PageTitle>
+
+<AuthorizeView Roles="Admin">
+    <Authorized>
+        <div class="page-head">
+            <div>
+                <h1>Alerts</h1>
+                <div class="sub">Crashes, unreachable servers, auto-restarts, and low disk — newest first.@(UnackedCount > 0 ? $" {UnackedCount} unacknowledged." : "")</div>
+            </div>
+            <button class="button" disabled="@(UnackedCount == 0)" @onclick="AckAllAsync">Acknowledge all</button>
+        </div>
+
+        <table class="data-table">
+            <thead><tr><th></th><th>When</th><th>Scope</th><th>Alert</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var a in _alerts)
+                {
+                    <tr class="@(a.Acknowledged ? "acked" : "")">
+                        <td><span class="sev @Sev(a.Severity)" title="@a.Severity"></span></td>
+                        <td class="mono">@a.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm:ss")</td>
+                        <td>@(string.IsNullOrEmpty(a.ServerName) || a.ServerName == "host" ? "Host" : a.ServerName)</td>
+                        <td>
+                            <div><b>@a.Title</b></div>
+                            @if (!string.IsNullOrWhiteSpace(a.Detail)) { <div class="stat-sub">@a.Detail</div> }
+                        </td>
+                        <td>
+                            @if (a.ResolvedAt is null)
+                            { <span class="reach-row"><span class="reach-dot warn"></span>Active</span> }
+                            else
+                            { <span class="stat-sub">Resolved</span> }
+                        </td>
+                        <td>
+                            @if (!a.Acknowledged)
+                            { <button @onclick="() => AckAsync(a.Id)">Acknowledge</button> }
+                        </td>
+                    </tr>
+                }
+                @if (_alerts.Count == 0)
+                {
+                    <tr><td colspan="6">No alerts. All quiet.</td></tr>
+                }
+            </tbody>
+        </table>
+    </Authorized>
+    <NotAuthorized><p>Admin access required.</p></NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private List<Alert> _alerts = [];
+    private string _email = "";
+
+    private int UnackedCount => _alerts.Count(a => !a.Acknowledged);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _alerts = await AlertSvc.ListAsync();
+
+    private async Task AckAsync(long id)
+    {
+        await Guard.EnsureAdminAsync(_email, "alert-ack", CancellationToken.None);
+        await AlertSvc.AcknowledgeAsync(id);
+        await LoadAsync();
+    }
+
+    private async Task AckAllAsync()
+    {
+        await Guard.EnsureAdminAsync(_email, "alert-ack-all", CancellationToken.None);
+        await AlertSvc.AcknowledgeAllAsync();
+        await LoadAsync();
+    }
+
+    private static string Sev(AlertSeverity s) => s switch
+    {
+        AlertSeverity.Critical => "critical",
+        AlertSeverity.Warning => "warning",
+        _ => "info"
+    };
+}

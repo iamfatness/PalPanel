@@ -27,7 +27,8 @@ public sealed class ServerManager(
     IHttpClientFactory httpFactory,
     IAdminGuard guard,
     ISecretProtector protector,
-    ILogger<ServerManager>? log = null) : IServerRegistry
+    ILogger<ServerManager>? log = null,
+    PalPanel.Control.AlertService? alerts = null) : IServerRegistry
 {
     private readonly ConcurrentDictionary<Guid, ServerRuntime> _runtimes = new();
 
@@ -180,7 +181,7 @@ public sealed class ServerManager(
     }
 
     private ServerRuntime BuildRuntime(ServerConfig cfg) =>
-        ServerRuntime.Build(cfg, launcher, httpFactory.CreateClient($"pal-{cfg.Id}"), dbf, guard, protector);
+        ServerRuntime.Build(cfg, launcher, httpFactory.CreateClient($"pal-{cfg.Id}"), dbf, guard, protector, alerts);
 
     private async Task EnsureUniqueProcessNameAsync(ServerConfig cfg, CancellationToken ct)
     {
