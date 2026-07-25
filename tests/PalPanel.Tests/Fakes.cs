@@ -23,9 +23,11 @@ public class FakeLauncher : IProcessLauncher
     public List<FakeProcess> Launched { get; } = [];
     public FakeProcess? Existing { get; set; }
     public Action<int>? OnLaunch { get; set; }   // fires with the new launch count; lets tests await the Nth launch
+    public long WorkingSetByName { get; set; }   // stubbed game-process memory for GameMemoryBytes tests
     public IServerProcess? FindExisting(string name) => Existing;
     public IServerProcess Launch(string exe, string args, string wd)
     { var p = new FakeProcess(); Launched.Add(p); OnLaunch?.Invoke(Launched.Count); return p; }
+    public long GetWorkingSetByName(string name) => WorkingSetByName;
 }
 
 public class ThrowingLauncher : IProcessLauncher
@@ -33,6 +35,7 @@ public class ThrowingLauncher : IProcessLauncher
     public IServerProcess? FindExisting(string name) => null;
     public IServerProcess Launch(string exe, string args, string wd)
         => throw new InvalidOperationException("exe not found");
+    public long GetWorkingSetByName(string name) => 0;
 }
 
 public class FlakyLauncher : IProcessLauncher
@@ -44,6 +47,7 @@ public class FlakyLauncher : IProcessLauncher
         if (Launched.Count >= 1) throw new InvalidOperationException("exe vanished before relaunch");
         var p = new FakeProcess(); Launched.Add(p); return p;
     }
+    public long GetWorkingSetByName(string name) => 0;
 }
 
 public class BlockingLauncher : IProcessLauncher
@@ -58,4 +62,5 @@ public class BlockingLauncher : IProcessLauncher
         Proceed.Wait();          // park (on the caller's worker thread) until the test releases it
         var p = new FakeProcess(); Launched.Add(p); return p;
     }
+    public long GetWorkingSetByName(string name) => 0;
 }

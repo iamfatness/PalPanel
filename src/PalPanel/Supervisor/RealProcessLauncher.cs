@@ -16,6 +16,20 @@ public class RealProcessLauncher : IProcessLauncher
         return new RealServerProcess(p);
     }
 
+    public long GetWorkingSetByName(string processName)
+    {
+        // Sum in case a name resolves to more than one process; WorkingSet64 is readable without
+        // elevation. Any process we can't inspect is skipped, never fatal.
+        long total = 0;
+        foreach (var p in Process.GetProcessesByName(processName))
+        {
+            try { p.Refresh(); total += p.WorkingSet64; }
+            catch { /* protected/exited process — skip */ }
+            finally { p.Dispose(); }
+        }
+        return total;
+    }
+
     private sealed class RealServerProcess(Process p) : IServerProcess
     {
         public int Pid => p.Id;

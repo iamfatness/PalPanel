@@ -26,6 +26,10 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
     // unreachable after this many consecutive failures, which stops the status from flapping.
     private const int UnreachableThreshold = 2;
 
+    // The real Palworld server process (the supervisor tracks the thin PalServer.exe launcher).
+    // Memory is reported from this so the fleet shows the server's actual RAM, not ~0.
+    private const string GameProcessName = "PalServer-Win64-Shipping-Cmd";
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -84,8 +88,9 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
             await rt.Events.LogAsync("api-recovered", "REST API answering again");
         st.ApiWasReachable = reachable;
 
+        var memBytes = sup.GameMemoryBytes(GameProcessName);
         rt.Snapshot.Publish(new ServerSnapshot(state, reachable, info, players, metrics,
-            sup.CurrentMemoryBytes, sup.RunningSince, DateTimeOffset.UtcNow));
+            memBytes, sup.RunningSince, DateTimeOffset.UtcNow));
 
         if (state == ServerState.Running && rawReachable)
         {
@@ -94,7 +99,7 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
             {
                 ServerId = rt.Id, Ts = DateTimeOffset.UtcNow, Players = players.Count,
                 Fps = metrics?.ServerFps ?? 0, FrameTimeMs = metrics?.ServerFrameTime ?? 0,
-                MemoryBytes = sup.CurrentMemoryBytes, UptimeSeconds = metrics?.Uptime ?? 0
+                MemoryBytes = memBytes, UptimeSeconds = metrics?.Uptime ?? 0
             });
             await db.SaveChangesAsync(ct);
             await DiffSessionsAsync(rt, st, players);

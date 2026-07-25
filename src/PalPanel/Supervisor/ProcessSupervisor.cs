@@ -16,6 +16,20 @@ public class ProcessSupervisor(IProcessLauncher launcher, IOptions<PanelOptions>
     public ServerState State { get; private set; } = ServerState.Stopped;
     public DateTimeOffset? RunningSince { get; private set; }
     public long CurrentMemoryBytes => _proc is { HasExited: false } p ? p.WorkingSetBytes : 0;
+
+    // Palworld's PalServer.exe launcher (what this supervisor tracks) is a thin ~6 MB shim that
+    // spawns the real server (PalServer-Win64-Shipping-Cmd) holding the world + RAM. Report the
+    // real server's working set for metrics, falling back to the tracked process if not found.
+    public long GameMemoryBytes(string gameProcessName)
+    {
+        if (State is ServerState.Stopped or ServerState.Held) return 0;
+        if (!string.IsNullOrWhiteSpace(gameProcessName))
+        {
+            var ws = launcher.GetWorkingSetByName(gameProcessName);
+            if (ws > 0) return ws;
+        }
+        return CurrentMemoryBytes;
+    }
     public event Action<ServerState>? StateChanged;
     public Func<string, string, Task>? OnEvent { get; set; }
     // injectable for tests; real delay is exponential backoff capped at 60 s

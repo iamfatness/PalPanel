@@ -127,6 +127,16 @@ public class PollerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Snapshot_ReportsRealGameProcessMemory_NotTheTrackedLauncher()
+    {
+        // The tracked (launcher) process reports 123 MB; the real game process reports ~5 GB.
+        _launcher.WorkingSetByName = 5_000_000_000;
+        await _sup.StartAsync(default);
+        await _poller.TickServerAsync(_rt, default);
+        Assert.Equal(5_000_000_000, Snap.Current.MemoryBytes);
+    }
+
+    [Fact]
     public async Task SingleFailedPoll_IsToleratedBeforeMarkingUnreachable()
     {
         await _sup.StartAsync(default);
