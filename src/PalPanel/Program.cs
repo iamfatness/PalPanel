@@ -48,6 +48,7 @@ builder.Services.AddSingleton<PalPanel.Control.ReachabilityService>();
 // Email config ("Alerts" section) lives in the gitignored appsettings.Local.json; the SMTP app
 // password is a secret and is never committed. Unconfigured => in-panel only.
 builder.Services.Configure<PalPanel.Control.AlertOptions>(builder.Configuration.GetSection("Alerts"));
+builder.Services.AddSingleton<PalPanel.Control.AlertSettingsService>();
 builder.Services.AddSingleton<PalPanel.Control.IAlertNotifier, PalPanel.Control.SmtpAlertNotifier>();
 builder.Services.AddSingleton<PalPanel.Control.AlertService>();
 

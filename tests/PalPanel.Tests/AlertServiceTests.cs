@@ -9,6 +9,7 @@ public class AlertServiceTests
     {
         public List<Alert> Sent { get; } = [];
         public Task SendAsync(Alert alert, CancellationToken ct = default) { Sent.Add(alert); return Task.CompletedTask; }
+        public Task SendTestAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private static IDbContextFactory<PanelDb> NewDb()

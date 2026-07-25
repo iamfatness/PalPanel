@@ -13,6 +13,7 @@ public class PanelDb(DbContextOptions<PanelDb> options) : DbContext(options)
     public DbSet<PanelUser> Users => Set<PanelUser>();
     public DbSet<Schedule> Schedules => Set<Schedule>();
     public DbSet<Alert> Alerts => Set<Alert>();
+    public DbSet<AlertSettings> AlertSettings => Set<AlertSettings>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {

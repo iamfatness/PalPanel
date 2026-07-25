@@ -9,6 +9,7 @@ public class AlertingEventSinkTests
     private sealed class NoopNotifier : IAlertNotifier
     {
         public Task SendAsync(Alert alert, CancellationToken ct = default) => Task.CompletedTask;
+        public Task SendTestAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class RecordingSink : IEventSink

@@ -58,8 +58,11 @@ exposed at `panel.iamfatness.us` via a Cloudflare Tunnel. .NET 8 Blazor Server, 
   → `reachable`, auto-restart/backup-failed → notifications); the poller adds host low-disk alerts.
   Condition alerts dedup/escalate per `(ServerId, Key)` so a loop yields one evolving alert, not a
   storm. Email (`SmtpAlertNotifier`) sends Warning+Critical only; Info is in-panel only. SMTP config
-  is the gitignored `Alerts` section (app password never committed); unconfigured = in-panel only.
-  All alert DB predicates avoid `DateTimeOffset` comparisons (SQLite can't translate them).
+  is **UI-managed** (Alerts page → Email settings, `AlertSettingsService`, single `AlertSettings`
+  row) with the password **encrypted via `ISecretProtector`** like server admin passwords — never
+  plaintext, never committed; the config `Alerts` section is only a one-time seed. "Save & send
+  test email" verifies delivery. All alert DB predicates avoid `DateTimeOffset` comparisons (SQLite
+  can't translate them).
 - Per-server pages resolve `ServerManager.Get(Id)` and render `<ServerNotFound />` if null.
 - Design tokens in `wwwroot/tokens.css` (dark-first + light via `prefers-color-scheme` and an
   explicit `[data-theme]` toggle); component styles in `app.css`. Charts read colors from tokens.

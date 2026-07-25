@@ -61,6 +61,20 @@ public static class SchemaUpgrade
             );
             """, ct);
 
+        // AlertSettings table (single-row panel email config; password stored encrypted).
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "AlertSettings" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_AlertSettings" PRIMARY KEY AUTOINCREMENT,
+                "EmailEnabled" INTEGER NOT NULL DEFAULT 0,
+                "SmtpHost" TEXT NOT NULL DEFAULT 'smtp.gmail.com',
+                "SmtpPort" INTEGER NOT NULL DEFAULT 587,
+                "SmtpUser" TEXT NOT NULL DEFAULT '',
+                "SmtpPasswordEnc" TEXT NOT NULL DEFAULT '',
+                "From" TEXT NOT NULL DEFAULT '',
+                "To" TEXT NOT NULL DEFAULT ''
+            );
+            """, ct);
+
         // Servers table (EF maps Guid/string -> TEXT, int -> INTEGER, bool -> INTEGER).
         await db.Database.ExecuteSqlRawAsync("""
             CREATE TABLE IF NOT EXISTS "Servers" (
