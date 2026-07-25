@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
 
 namespace PalPanel.PalApi;
 
@@ -54,10 +55,15 @@ public class PalApiClient : IPalApi
 
     private async Task Post(string path, object? body, CancellationToken ct)
     {
-        // Verify the server actually accepted the action so callers can honestly confirm success
-        // (announce, save, kick, ...) instead of fire-and-forget. All callers already surface or
-        // log exceptions, so a rejected action is reported, never silently "sent".
-        var resp = await _http.PostAsync(path, body is null ? null : JsonContent.Create(body), ct);
+        // Palworld's minimal REST server REQUIRES a Content-Length and rejects chunked transfer
+        // encoding with 411. JsonContent streams chunked, silently breaking every POST (announce,
+        // save, kick, ...). Serialize to a buffered StringContent so the request carries a known
+        // Content-Length (0 for bodyless actions).
+        var json = body is null ? "" : JsonSerializer.Serialize(body);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var resp = await _http.PostAsync(path, content, ct);
+        // Verify the server accepted the action so callers can honestly confirm success instead of
+        // fire-and-forget. All callers already surface or log exceptions.
         if (!resp.IsSuccessStatusCode)
             throw new InvalidOperationException($"The server rejected '{path}' ({(int)resp.StatusCode} {resp.ReasonPhrase}).");
     }
