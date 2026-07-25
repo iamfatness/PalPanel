@@ -116,6 +116,28 @@ public sealed class ServerManager(
         }
     }
 
+    // Auto-restart settings only affect the poller's decisions, not the live process, so they can
+    // be changed while the server runs: persist, then mutate the live runtime's config in place so
+    // the poller reads the new values on its next tick (no rebuild/stop required).
+    public async Task UpdateAutoRestartAsync(Guid id, int unreachableMinutes, double memoryGb, CancellationToken ct = default)
+    {
+        unreachableMinutes = Math.Max(0, unreachableMinutes);
+        memoryGb = Math.Max(0, memoryGb);
+        await using (var db = await dbf.CreateDbContextAsync(ct))
+        {
+            var row = await db.Servers.FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (row is null) return;
+            row.AutoRestartUnreachableMinutes = unreachableMinutes;
+            row.AutoRestartMemoryGb = memoryGb;
+            await db.SaveChangesAsync(ct);
+        }
+        if (Get(id) is { } rt)
+        {
+            rt.Config.AutoRestartUnreachableMinutes = unreachableMinutes;
+            rt.Config.AutoRestartMemoryGb = memoryGb;
+        }
+    }
+
     public async Task RemoveAsync(Guid id, string actor, CancellationToken ct = default)
     {
         if (_runtimes.TryRemove(id, out var rt))

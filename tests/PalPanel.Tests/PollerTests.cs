@@ -153,6 +153,29 @@ public class PollerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AutoRestart_TriggersOnMemoryBlowup_WhenEnabled()
+    {
+        _launcher.WorkingSetByName = 5_000_000_000; // 5 GB real process
+        _rt.Config.AutoRestartMemoryGb = 1;         // restart when over 1 GB
+        await _sup.StartAsync(default);
+        await _poller.TickServerAsync(_rt, default);
+        using var db = _dbf.CreateDbContext();
+        Assert.Contains(db.Events, e => e.Type == "auto-restart" && e.Detail.Contains("memory"));
+    }
+
+    [Fact]
+    public async Task AutoRestart_DoesNotTrigger_WhenDisabled()
+    {
+        _launcher.WorkingSetByName = 5_000_000_000;
+        _rt.Config.AutoRestartMemoryGb = 0;         // off
+        _rt.Config.AutoRestartUnreachableMinutes = 0;
+        await _sup.StartAsync(default);
+        await _poller.TickServerAsync(_rt, default);
+        using var db = _dbf.CreateDbContext();
+        Assert.DoesNotContain(db.Events, e => e.Type == "auto-restart");
+    }
+
+    [Fact]
     public async Task OneServerDown_DoesNotStallAnother()
     {
         // Reachable server (the stub) and an unreachable server (throwing API). Ticking both

@@ -59,6 +59,20 @@ else
             <button @onclick="AddScheduleAsync">Add schedule</button>
         </div>
 
+        <h2>Auto-restart</h2>
+        <p class="stat-sub">Restart this server automatically when it stops responding or uses too much memory. Set 0 to turn a trigger off. Changes apply immediately — no need to stop the server.</p>
+        @if (_autoNotice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_autoNotice</div>
+        }
+        <div class="form-grid">
+            <label>Restart if API unreachable for (minutes)<input type="number" min="0" @bind="_arUnreachable" /></label>
+            <label>Restart if memory exceeds (GB)<input type="number" min="0" step="0.5" @bind="_arMemGb" /></label>
+        </div>
+        <div class="actions">
+            <button class="primary" @onclick="SaveAutoRestartAsync">Save auto-restart</button>
+        </div>
+
         <h2>Diagnostics</h2>
         <table class="data-table">
             <tbody>
@@ -98,6 +112,9 @@ else
     private string _newAction = "restart";
     private bool _apiTestBusy;
     private string? _apiTestResult;
+    private int _arUnreachable;
+    private double _arMemGb;
+    private string? _autoNotice;
 
     protected override async Task OnInitializedAsync()
     {
@@ -105,7 +122,21 @@ else
         if (_rt is null) return;
         var auth = await AuthState.GetAuthenticationStateAsync();
         _email = auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "unknown";
+        _arUnreachable = _rt.Config.AutoRestartUnreachableMinutes;
+        _arMemGb = _rt.Config.AutoRestartMemoryGb;
         await LoadSchedulesAsync();
+    }
+
+    private async Task SaveAutoRestartAsync()
+    {
+        _autoNotice = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "auto-restart-config", CancellationToken.None);
+            await Manager.UpdateAutoRestartAsync(Id, _arUnreachable, _arMemGb);
+            _autoNotice = "Auto-restart settings saved.";
+        }
+        catch (Exception ex) { _autoNotice = $"Couldn't save: {ex.Message}"; }
     }
 
     private async Task LoadSchedulesAsync()

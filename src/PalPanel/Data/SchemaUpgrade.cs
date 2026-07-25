@@ -20,6 +20,9 @@ public static class SchemaUpgrade
         // CPU metrics added later; default 0 for existing rows.
         ("Samples", "Cpu", "REAL", "0"),
         ("SampleRollups", "AvgCpu", "REAL", "0"),
+        // Health-based auto-restart config (0 = off).
+        ("Servers", "AutoRestartUnreachableMinutes", "INTEGER", "0"),
+        ("Servers", "AutoRestartMemoryGb", "REAL", "0"),
     };
 
     public static async Task ApplyAsync(PanelDb db, CancellationToken ct = default)

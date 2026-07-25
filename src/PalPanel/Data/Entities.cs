@@ -22,6 +22,9 @@ public class ServerConfig
     public int PollIntervalSeconds { get; set; } = 10;
     public bool AutoRestart { get; set; } = true;
     public bool Enabled { get; set; } = true;
+    // Health-based auto-restart (0 = off), evaluated by the poller.
+    public int AutoRestartUnreachableMinutes { get; set; }   // restart if the API is unreachable this long
+    public double AutoRestartMemoryGb { get; set; }          // restart if process memory exceeds this many GB
 }
 
 public class Sample

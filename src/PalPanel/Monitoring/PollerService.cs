@@ -22,7 +22,13 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
         public bool Reconciled;
         public TimeSpan? PrevCpu;          // last observed cumulative CPU time
         public DateTimeOffset PrevCpuAt;   // when it was observed (for the wall-clock delta)
+        public DateTimeOffset? FirstUnreachableAt;               // start of the current unreachable streak
+        public DateTimeOffset LastAutoRestartAt = DateTimeOffset.MinValue;  // cooldown anchor
     }
+
+    // Minimum gap between health-triggered auto-restarts, so a restart cycle (or a server that
+    // stays bad) can't restart-storm.
+    private static readonly TimeSpan AutoRestartCooldown = TimeSpan.FromMinutes(5);
 
     // A single failed poll (a transient Palworld API stall) is tolerated; the UI is only marked
     // unreachable after this many consecutive failures, which stops the status from flapping.
@@ -67,6 +73,7 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
         if (state is ServerState.Stopped or ServerState.Held or ServerState.Stopping)
         {
             st.PrevCpu = null; // reset the CPU baseline so a fresh run starts clean
+            st.FirstUnreachableAt = null;
             rt.Snapshot.Publish(new ServerSnapshot(state, false, null, [], null, 0, null, DateTimeOffset.UtcNow));
             await CloseAllSessionsAsync(rt, st);
             return;
@@ -122,6 +129,42 @@ public class PollerService(ServerManager manager, IDbContextFactory<PanelDb> dbf
             await db.SaveChangesAsync(ct);
             await DiffSessionsAsync(rt, st, players);
         }
+
+        await EvaluateAutoRestartAsync(rt, st, state, rawReachable, memBytes, wallNow);
+    }
+
+    // Opt-in per server: restart when the API has been unreachable too long, or the process is
+    // eating too much RAM. Only while Running (not mid-startup), guarded by a cooldown; the
+    // orchestrator's own gate + crash-loop protection prevent storms.
+    private async Task EvaluateAutoRestartAsync(ServerRuntime rt, PollState st, ServerState state,
+        bool rawReachable, long memBytes, DateTimeOffset now)
+    {
+        if (state != ServerState.Running) { st.FirstUnreachableAt = null; return; }
+
+        st.FirstUnreachableAt = rawReachable ? null : (st.FirstUnreachableAt ?? now);
+
+        var cfg = rt.Config;
+        string? reason = null;
+        if (cfg.AutoRestartUnreachableMinutes > 0 && st.FirstUnreachableAt is { } since
+            && now - since >= TimeSpan.FromMinutes(cfg.AutoRestartUnreachableMinutes))
+            reason = $"API unreachable for {cfg.AutoRestartUnreachableMinutes} min";
+        else if (cfg.AutoRestartMemoryGb > 0 && memBytes / 1_073_741_824.0 >= cfg.AutoRestartMemoryGb)
+            reason = $"memory over {cfg.AutoRestartMemoryGb:0.#} GB";
+
+        if (reason is null || now - st.LastAutoRestartAt < AutoRestartCooldown) return;
+
+        st.LastAutoRestartAt = now;
+        st.FirstUnreachableAt = null;
+        await rt.Events.LogAsync("auto-restart", $"Auto-restarting: {reason}");
+        _ = SafeRestartAsync(rt);   // fire-and-forget; the restart ritual is long and self-serializing
+    }
+
+    private static async Task SafeRestartAsync(ServerRuntime rt)
+    {
+        // Synthetic actor bypasses the admin guard (same as scheduled restarts); no warnings since
+        // an unreachable server can't relay them anyway.
+        try { await rt.Orchestrator.RestartAsync(PalPanel.Auth.AdminGuard.SchedulerActor, null, CancellationToken.None); }
+        catch (Exception ex) { try { await rt.Events.LogAsync("auto-restart-failed", ex.Message); } catch { } }
     }
 
     private async Task DiffSessionsAsync(ServerRuntime rt, PollState st, IReadOnlyList<PlayerInfo> players)
