@@ -195,6 +195,12 @@ input::placeholder { color: var(--ink-3); }
 .notice svg { width: 15px; height: 15px; color: var(--online); flex: none; }
 .mono { font-family: var(--mono); font-size: .9em; color: var(--ink-2); }
 
+/* Simple/Advanced segmented toggle */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; flex: none; }
+.seg button { border: 0; border-radius: 0; background: var(--panel-2); color: var(--ink-2); padding: 8px 18px; font-weight: 600; font-size: 13px; }
+.seg button.on { background: var(--azure); color: var(--accent-ink); }
+.seg button:not(.on):hover { color: var(--ink); border-color: transparent; }
+
 /* ===================== Tables ===================== */
 .data-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 1.5rem; box-shadow: var(--shadow-sm); }
 .data-table th, .data-table td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); }
