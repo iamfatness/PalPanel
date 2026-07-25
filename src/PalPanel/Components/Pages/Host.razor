@@ -1,0 +1,126 @@
+@page "/host"
+@using PalPanel.Control
+@using PalPanel.Servers
+@inject ServerManager Manager
+@rendermode InteractiveServer
+
+<PageTitle>PalPanel — Host</PageTitle>
+
+<AuthorizeView Roles="Admin">
+    <Authorized>
+        <div class="page-head">
+            <div>
+                <h1>Host</h1>
+                <div class="sub">Vitals for the machine running the panel and its servers.</div>
+            </div>
+            <button class="button" @onclick="RefreshAsync" disabled="@_busy">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M20 11a8 8 0 10-.6 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M20 5v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Refresh
+            </button>
+        </div>
+
+        <div class="host-grid">
+            <div class="gauge">
+                <div class="k">
+                    <svg viewBox="0 0 24 24" fill="none" width="15" height="15"><rect x="5" y="5" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M9 9h6v6H9z" stroke="currentColor" stroke-width="1.5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    CPU
+                </div>
+                <div class="v">@_cpu.ToString("0")<small>%</small></div>
+                <div class="bar"><i style="width:@_cpu.ToString("0", Inv)%; --fill:@BarColor(_cpu)"></i></div>
+                <div class="foot">whole machine, all cores</div>
+            </div>
+
+            <div class="gauge">
+                <div class="k">
+                    <svg viewBox="0 0 24 24" fill="none" width="15" height="15"><rect x="3" y="7" width="18" height="10" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M7 7v10M11 7v10M15 7v10" stroke="currentColor" stroke-width="1.5"/></svg>
+                    Memory
+                </div>
+                @if (_mem is { } m)
+                {
+                    <div class="v">@m.UsedPercent.ToString("0")<small>%</small></div>
+                    <div class="bar"><i style="width:@m.UsedPercent.ToString("0", Inv)%; --fill:@BarColor(m.UsedPercent)"></i></div>
+                    <div class="foot">@HostStats.FormatBytes(m.UsedBytes) of @HostStats.FormatBytes(m.TotalBytes) used</div>
+                }
+                else
+                {
+                    <div class="v">—</div>
+                    <div class="foot">unavailable</div>
+                }
+            </div>
+
+            @foreach (var d in _disks)
+            {
+                <div class="gauge">
+                    <div class="k">
+                        <svg viewBox="0 0 24 24" fill="none" width="15" height="15"><ellipse cx="12" cy="6" rx="8" ry="3" stroke="currentColor" stroke-width="1.7"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" stroke="currentColor" stroke-width="1.7"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" stroke="currentColor" stroke-width="1.5"/></svg>
+                        Disk @d.Name.TrimEnd('\\')
+                    </div>
+                    <div class="v">@d.UsedPercent.ToString("0")<small>%</small></div>
+                    <div class="bar"><i style="width:@d.UsedPercent.ToString("0", Inv)%; --fill:@BarColor(d.UsedPercent)"></i></div>
+                    <div class="foot">@HostStats.FormatBytes(d.FreeBytes) free of @HostStats.FormatBytes(d.TotalBytes)</div>
+                </div>
+            }
+        </div>
+
+        <div class="section-rule"><h2>Backup storage</h2><div class="rule"></div></div>
+        <table class="data-table">
+            <thead><tr><th>Server</th><th>Backup folder</th><th>On disk</th></tr></thead>
+            <tbody>
+                @foreach (var b in _backups)
+                {
+                    <tr>
+                        <td>@b.Name</td>
+                        <td class="mono">@b.Path</td>
+                        <td>@HostStats.FormatBytes(b.Bytes)</td>
+                    </tr>
+                }
+                @if (_backups.Count == 0)
+                {
+                    <tr><td colspan="3">No servers configured.</td></tr>
+                }
+            </tbody>
+        </table>
+    </Authorized>
+    <NotAuthorized><p>Admin access required.</p></NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+
+    private double _cpu;
+    private HostStats.MemInfo? _mem;
+    private IReadOnlyList<HostStats.DiskInfo> _disks = [];
+    private record BackupUsage(string Name, string Path, long Bytes);
+    private List<BackupUsage> _backups = [];
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private async Task RefreshAsync()
+    {
+        _busy = true;
+        try
+        {
+            // Disk/RAM/directory reads can block briefly; keep them off the render path.
+            _cpu = await HostStats.HostCpuPercentAsync();
+            await Task.Run(() =>
+            {
+                _mem = HostStats.HostMemory();
+                _disks = HostStats.Disks();
+                _backups = Manager.All()
+                    .OrderBy(r => r.Config.Name)
+                    .Select(r => new BackupUsage(r.Config.Name, r.Config.BackupDirectory,
+                        HostStats.DirectorySize(r.Config.BackupDirectory)))
+                    .ToList();
+            });
+        }
+        finally { _busy = false; }
+    }
+
+    private static string BarColor(double pct) => pct switch
+    {
+        >= 90 => "var(--down)",
+        >= 75 => "var(--warn)",
+        _ => "var(--online)"
+    };
+}

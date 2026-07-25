@@ -65,6 +65,12 @@
                 </NavLink>
             </li>
             <li>
+                <NavLink href="@($"/s/{_currentServer.Id}/logs")">
+                    <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="3.5" width="16" height="17" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                    Logs
+                </NavLink>
+            </li>
+            <li>
                 <NavLink href="@($"/s/{_currentServer.Id}/settings")">
                     <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
                     Server settings
@@ -75,6 +81,12 @@
 
     <AuthorizeView Roles="Admin">
         <li class="navlabel">Panel</li>
+        <li>
+            <NavLink href="/host">
+                <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="3" y="13" width="18" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><circle cx="7" cy="7.5" r="1" fill="currentColor"/><circle cx="7" cy="16.5" r="1" fill="currentColor"/></svg>
+                Host
+            </NavLink>
+        </li>
         <li>
             <NavLink href="/settings">
                 <svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.6-3 3-4.5 5.5-4.5S13.9 16 14.5 19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>

@@ -12,6 +12,7 @@
 @inject AuthenticationStateProvider AuthState
 @inject IAdminGuard Guard
 @inject SteamCmdService Steam
+@inject ReachabilityService Reach
 @rendermode InteractiveServer
 
 <PageTitle>PalPanel — @(_rt?.Config.Name ?? "Server") Settings</PageTitle>
@@ -32,21 +33,23 @@ else
         {
             <div class="alert">@_scheduleError</div>
         }
+        <p class="stat-sub">Cron is UTC. <b>announce</b> broadcasts the message below to in-game chat — handy for recurring reminders (restart warnings, event times, rules).</p>
         <table class="data-table">
-            <thead><tr><th>Cron</th><th>Action</th><th>Enabled</th><th></th></tr></thead>
+            <thead><tr><th>Cron (UTC)</th><th>Action</th><th>Message</th><th>Enabled</th><th></th></tr></thead>
             <tbody>
                 @foreach (var s in _schedules)
                 {
                     <tr>
-                        <td>@s.Cron</td>
+                        <td class="mono">@s.Cron</td>
                         <td>@s.Action</td>
+                        <td>@(s.Action == "announce" ? s.Parameters : "—")</td>
                         <td><input type="checkbox" checked="@s.Enabled" @onchange="() => ToggleEnabledAsync(s)" /></td>
                         <td><button @onclick="() => DeleteScheduleAsync(s)">Delete</button></td>
                     </tr>
                 }
                 @if (_schedules.Count == 0)
                 {
-                    <tr><td colspan="4">No schedules configured.</td></tr>
+                    <tr><td colspan="5">No schedules configured.</td></tr>
                 }
             </tbody>
         </table>
@@ -56,7 +59,12 @@ else
             <select @bind="_newAction">
                 <option value="restart">restart</option>
                 <option value="backup">backup</option>
+                <option value="announce">announce</option>
             </select>
+            @if (_newAction == "announce")
+            {
+                <input placeholder="Message to broadcast" @bind="_newParameters" @bind:event="oninput" />
+            }
             <button @onclick="AddScheduleAsync">Add schedule</button>
         </div>
 
@@ -103,6 +111,56 @@ else
             <button class="primary" disabled="@_updating" @onclick="UpdateNowAsync">Update now</button>
         </div>
 
+        <h2>Connectivity</h2>
+        <p class="stat-sub">Checks that players can reach this server: the box's current public IP, whether the game port is open locally, and (if you set a hostname) whether its DNS still points at this box. Set your domain so a changed public IP is caught early.</p>
+        @if (_hostNotice is not null)
+        {
+            <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_hostNotice</div>
+        }
+        <div class="send-box">
+            <input @bind="_publicHostname" @bind:event="oninput" placeholder="Public hostname players connect to, e.g. palworld.example.com" />
+            <button class="primary" @onclick="SaveHostnameAsync">Save hostname</button>
+        </div>
+        <div class="actions">
+            <button disabled="@_reachBusy" @onclick="CheckReachabilityAsync">@(_reachBusy ? "Checking…" : "Run reachability check")</button>
+        </div>
+        @if (_reach is not null)
+        {
+            <table class="data-table">
+                <tbody>
+                    <tr>
+                        <td>Public IP (this box)</td>
+                        <td><span class="reach-row"><span class="reach-dot @(_reach.PublicIp is null ? "bad" : "ok")"></span><span class="mono">@(_reach.PublicIp ?? "unknown")</span></span></td>
+                    </tr>
+                    <tr>
+                        <td>Game port @_reach.GamePort listening locally</td>
+                        <td><span class="reach-row"><span class="reach-dot @(_reach.GamePortListening ? "ok" : "bad")"></span>@(_reach.GamePortListening ? "yes — server is bound to this port" : "no — is the server running?")</span></td>
+                    </tr>
+                    @if (_reach.DnsHostname is not null)
+                    {
+                        <tr>
+                            <td>DNS for @_reach.DnsHostname</td>
+                            <td><span class="mono">@(_reach.DnsAddresses.Count > 0 ? string.Join(", ", _reach.DnsAddresses) : "did not resolve")</span></td>
+                        </tr>
+                        <tr>
+                            <td>DNS points at this box</td>
+                            <td>
+                                <span class="reach-row">
+                                    <span class="reach-dot @(_reach.DnsMatchesPublicIp switch { true => "ok", false => "bad", _ => "warn" })"></span>
+                                    @(_reach.DnsMatchesPublicIp switch { true => "yes — hostname resolves to your public IP", false => "NO — hostname resolves elsewhere; update your DNS record", _ => "couldn't compare (no public IP or no DNS answer)" })
+                                </span>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <p class="stat-sub">A local listener + matching DNS means players using the hostname reach this box. A closed router/firewall port-forward is the one thing this can't see — verify UDP @_reach.GamePort is forwarded if players still can't connect.</p>
+            @if (_reach.Error is not null)
+            {
+                <p class="stat-sub">Note: @_reach.Error</p>
+            }
+        }
+
         <h2>Diagnostics</h2>
         <table class="data-table">
             <tbody>
@@ -140,6 +198,7 @@ else
     private string? _scheduleError;
     private string _newCron = "";
     private string _newAction = "restart";
+    private string _newParameters = "";
     private bool _apiTestBusy;
     private string? _apiTestResult;
     private int _arUnreachable;
@@ -152,6 +211,10 @@ else
     private bool _checking;
     private bool _updating;
     private string? _updateNotice;
+    private string _publicHostname = "";
+    private string? _hostNotice;
+    private bool _reachBusy;
+    private ReachabilityService.Result? _reach;
 
     private string UpdateStatus => (_installedBuild, _latestBuild) switch
     {
@@ -170,8 +233,37 @@ else
         _arUnreachable = _rt.Config.AutoRestartUnreachableMinutes;
         _arMemGb = _rt.Config.AutoRestartMemoryGb;
         _launchArgs = _rt.Config.LaunchArgs;
+        _publicHostname = _rt.Config.PublicHostname;
         _installedBuild = ReadInstalledBuild();
         await LoadSchedulesAsync();
+    }
+
+    private async Task SaveHostnameAsync()
+    {
+        _hostNotice = null;
+        try
+        {
+            await Guard.EnsureAdminAsync(_email, "public-hostname", CancellationToken.None);
+            await Manager.UpdatePublicHostnameAsync(Id, _publicHostname);
+            _hostNotice = "Public hostname saved.";
+        }
+        catch (Exception ex) { _hostNotice = $"Couldn't save: {ex.Message}"; }
+    }
+
+    private async Task CheckReachabilityAsync()
+    {
+        _reachBusy = true;
+        try
+        {
+            var port = ReachabilityService.ParseGamePort(_rt!.Config.LaunchArgs);
+            var host = string.IsNullOrWhiteSpace(_publicHostname) ? null : _publicHostname;
+            _reach = await Reach.CheckAsync(port, host, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _reach = new ReachabilityService.Result(null, ReachabilityService.ParseGamePort(_rt!.Config.LaunchArgs), false, null, Array.Empty<string>(), null, ex.Message);
+        }
+        finally { _reachBusy = false; }
     }
 
     private long? ReadInstalledBuild()
@@ -271,16 +363,30 @@ else
             _scheduleError = $"Invalid cron expression '{_newCron}': {ex.Message}";
             return;
         }
+        if (_newAction == "announce" && string.IsNullOrWhiteSpace(_newParameters))
+        {
+            _scheduleError = "An announce schedule needs a message to broadcast.";
+            return;
+        }
 
         try
         {
             await Guard.EnsureAdminAsync(_email, "schedule-change", CancellationToken.None);
             await using var db = await DbFactory.CreateDbContextAsync();
-            var s = new Schedule { ServerId = Id, Cron = _newCron, Action = _newAction, Enabled = true };
+            var s = new Schedule
+            {
+                ServerId = Id,
+                Cron = _newCron,
+                Action = _newAction,
+                Parameters = _newAction == "announce" ? _newParameters.Trim() : null,
+                Enabled = true
+            };
             db.Schedules.Add(s);
             await db.SaveChangesAsync();
-            await Events.LogAsync("schedule-change", $"Added schedule {s.Cron} -> {s.Action} on {_rt!.Config.Name}", _email);
+            var suffix = s.Action == "announce" ? $": \"{s.Parameters}\"" : "";
+            await Events.LogAsync("schedule-change", $"Added schedule {s.Cron} -> {s.Action}{suffix} on {_rt!.Config.Name}", _email);
             _newCron = "";
+            _newParameters = "";
             await LoadSchedulesAsync();
         }
         catch (UnauthorizedAccessException ex) { _scheduleError = ex.Message; }

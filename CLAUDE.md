@@ -41,7 +41,17 @@ exposed at `panel.iamfatness.us` via a Cloudflare Tunnel. .NET 8 Blazor Server, 
 ## UI / routing
 
 - `/` = **Fleet** dashboard (a card per server). Per-server pages: `/s/{id}`,
-  `/s/{id}/players|history|backups|settings`. Panel-wide settings (users): `/settings`.
+  `/s/{id}/players|messages|history|backups|game-settings|logs|settings`. Panel-wide pages:
+  `/host` (host CPU/RAM/disk + per-server backup sizes) and `/settings` (users). All admin-gated
+  pages still enforce `IAdminGuard` server-side — nav visibility is not the boundary.
+- **Logs** (`/s/{id}/logs`) tails `Pal/Saved/Logs/Pal.log` (`LogReader`, shared read); Palworld only
+  writes it with the `-log` launch switch, so the page detects its absence and offers to append
+  `-log` to the launch args. **Connectivity** (in Server settings, `ReachabilityService`) reports
+  public IP, local game-port listener, and DNS-vs-public-IP for the optional `PublicHostname`.
+  **Host** (`/host`, `HostStats`) reads whole-machine CPU (GetSystemTimes), RAM (GlobalMemoryStatusEx),
+  and fixed disks (DriveInfo) via guarded Win32 — degrades to null/empty, never throws into the UI.
+- Schedules support `restart`, `backup`, and `announce` (message in `Schedule.Parameters`, broadcast
+  via `Orchestrator.AnnounceAsync(AdminGuard.SchedulerActor, …)`).
 - Per-server pages resolve `ServerManager.Get(Id)` and render `<ServerNotFound />` if null.
 - Design tokens in `wwwroot/tokens.css` (dark-first + light via `prefers-color-scheme` and an
   explicit `[data-theme]` toggle); component styles in `app.css`. Charts read colors from tokens.

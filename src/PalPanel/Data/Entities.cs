@@ -26,6 +26,7 @@ public class ServerConfig
     public int AutoRestartUnreachableMinutes { get; set; }   // restart if the API is unreachable this long
     public double AutoRestartMemoryGb { get; set; }          // restart if process memory exceeds this many GB
     public long SteamAppId { get; set; } = 2394010;          // Palworld Dedicated Server; used for SteamCMD updates
+    public string PublicHostname { get; set; } = "";         // optional: domain players connect to, for the reachability/DNS check
 }
 
 public class Sample

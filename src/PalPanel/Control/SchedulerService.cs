@@ -104,6 +104,15 @@ public class SchedulerService(
             case "backup":
                 await rt.Backups.CreateBackupAsync("scheduled", ct);
                 break;
+            case "announce":
+                // Broadcast the schedule's message to in-game chat. SchedulerActor is guard-exempt,
+                // exactly like the restart ritual's announces. An empty message is a misconfigured
+                // row — log it rather than spamming a blank broadcast.
+                if (string.IsNullOrWhiteSpace(s.Parameters))
+                    await rt.Events.LogAsync("schedule-error", $"Announce schedule {s.Id} has no message; skipping");
+                else
+                    await rt.Orchestrator.AnnounceAsync(PalPanel.Auth.AdminGuard.SchedulerActor, s.Parameters, ct);
+                break;
             default:
                 await rt.Events.LogAsync("schedule-error", $"Unknown schedule action '{s.Action}' on schedule {s.Id}");
                 break;

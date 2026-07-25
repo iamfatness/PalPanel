@@ -153,6 +153,20 @@ public sealed class ServerManager(
         Get(id)?.SetLaunchArgs(args);
     }
 
+    // Live-update the optional public hostname (used only by the reachability/DNS check).
+    public async Task UpdatePublicHostnameAsync(Guid id, string hostname, CancellationToken ct = default)
+    {
+        hostname = (hostname ?? "").Trim();
+        await using (var db = await dbf.CreateDbContextAsync(ct))
+        {
+            var row = await db.Servers.FirstOrDefaultAsync(s => s.Id == id, ct);
+            if (row is null) return;
+            row.PublicHostname = hostname;
+            await db.SaveChangesAsync(ct);
+        }
+        if (Get(id) is { } rt) rt.Config.PublicHostname = hostname;
+    }
+
     public async Task RemoveAsync(Guid id, string actor, CancellationToken ct = default)
     {
         if (_runtimes.TryRemove(id, out var rt))

@@ -25,6 +25,8 @@ public static class SchemaUpgrade
         ("Servers", "AutoRestartMemoryGb", "REAL", "0"),
         // SteamCMD app id for updates (Palworld Dedicated Server default).
         ("Servers", "SteamAppId", "INTEGER", "2394010"),
+        // Optional public hostname players connect to, for the reachability/DNS check.
+        ("Servers", "PublicHostname", "TEXT", "''"),
     };
 
     public static async Task ApplyAsync(PanelDb db, CancellationToken ct = default)

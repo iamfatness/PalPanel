@@ -15,12 +15,14 @@ public class SchedulerTests
     {
         public int RestartCalls;
         public List<(string Actor, IReadOnlyList<int>? Warnings)> RestartArgs { get; } = [];
+        public List<(string Actor, string Message)> AnnounceArgs { get; } = [];
         public Task StartAsync(string actor, CancellationToken ct) => Task.CompletedTask;
         public Task StopAsync(string actor, CancellationToken ct) => Task.CompletedTask;
         public Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct)
         { RestartCalls++; RestartArgs.Add((actor, warningMinutes)); return Task.CompletedTask; }
         public Task SaveAsync(string actor, CancellationToken ct) => Task.CompletedTask;
-        public Task AnnounceAsync(string actor, string message, CancellationToken ct) => Task.CompletedTask;
+        public Task AnnounceAsync(string actor, string message, CancellationToken ct)
+        { AnnounceArgs.Add((actor, message)); return Task.CompletedTask; }
         public Task KickAsync(string actor, string userId, string name, CancellationToken ct) => Task.CompletedTask;
         public Task BanAsync(string actor, string userId, string name, CancellationToken ct) => Task.CompletedTask;
         public Task UnbanAsync(string actor, string userId, string name, CancellationToken ct) => Task.CompletedTask;
@@ -182,6 +184,46 @@ public class SchedulerTests
 
         await sched.CheckDueAsync(DateTimeOffset.Parse("2026-01-10T04:00:10Z"), default);
         Assert.Equal(["scheduled"], backup.Reasons);
+    }
+
+    [Fact]
+    public async Task AnnounceSchedule_FiresAnnounceWithMessageAsSchedulerActor()
+    {
+        var sid = Guid.NewGuid();
+        var dbf = NewDb();
+        using (var db = dbf.CreateDbContext())
+        {
+            db.Schedules.Add(new Schedule { ServerId = sid, Cron = "0 4 * * *", Action = "announce", Parameters = "Nightly reset in 30 min", Enabled = true });
+            db.SaveChanges();
+        }
+        var orch = new FakeOrchestrator();
+        var reg = new FakeRegistry(); reg.Add(Runtime(sid, orch, new FakeBackup(), new RecordingEvents()));
+        var sched = MakeScheduler(dbf, reg, new RecordingEvents(), DateTimeOffset.Parse("2026-01-10T00:00:00Z"));
+
+        await sched.CheckDueAsync(DateTimeOffset.Parse("2026-01-10T04:00:10Z"), default);
+        Assert.Single(orch.AnnounceArgs);
+        Assert.Equal("scheduler", orch.AnnounceArgs[0].Actor);
+        Assert.Equal("Nightly reset in 30 min", orch.AnnounceArgs[0].Message);
+    }
+
+    [Fact]
+    public async Task AnnounceSchedule_WithNoMessage_LogsErrorAndDoesNotBroadcast()
+    {
+        var sid = Guid.NewGuid();
+        var dbf = NewDb();
+        using (var db = dbf.CreateDbContext())
+        {
+            db.Schedules.Add(new Schedule { ServerId = sid, Cron = "0 4 * * *", Action = "announce", Parameters = "  ", Enabled = true });
+            db.SaveChanges();
+        }
+        var orch = new FakeOrchestrator();
+        var serverEvents = new RecordingEvents();
+        var reg = new FakeRegistry(); reg.Add(Runtime(sid, orch, new FakeBackup(), serverEvents));
+        var sched = MakeScheduler(dbf, reg, new RecordingEvents(), DateTimeOffset.Parse("2026-01-10T00:00:00Z"));
+
+        await sched.CheckDueAsync(DateTimeOffset.Parse("2026-01-10T04:00:10Z"), default);
+        Assert.Empty(orch.AnnounceArgs);
+        Assert.Single(serverEvents.Events, e => e.Type == "schedule-error");
     }
 
     [Fact]
