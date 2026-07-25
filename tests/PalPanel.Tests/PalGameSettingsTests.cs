@@ -45,6 +45,22 @@ public class PalGameSettingsTests
     }
 
     [Fact]
+    public void Catalog_HidesNoOpAndPanelCriticalKeys_ButFileKeepsThem()
+    {
+        const string ini = "[/Script/Pal.PalGameWorldSettings]\r\n" +
+            "OptionSettings=(ExpRate=1.000000,bIsMultiplay=False,RESTAPIPort=8212,AdminPassword=\"x\")\r\n";
+        var s = PalGameSettings.Parse(ini);
+        var fields = PalSettingsCatalog.BuildFields(s);
+
+        Assert.DoesNotContain(fields, f => f.Key == "bIsMultiplay");   // no-op on dedicated
+        Assert.DoesNotContain(fields, f => f.Key == "RESTAPIPort");    // panel-critical
+        Assert.DoesNotContain(fields, f => f.Key == "AdminPassword");  // panel-critical
+        Assert.Contains(fields, f => f.Key == "ExpRate");
+
+        Assert.Equal(ini, s.ToIniText());   // hidden keys are still written back unchanged
+    }
+
+    [Fact]
     public void MissingOptionSettings_Throws()
     {
         Assert.Throws<FormatException>(() => PalGameSettings.Parse("[/Script/Pal.PalGameWorldSettings]\r\n"));

@@ -35,10 +35,13 @@ public sealed class PalSettingField
 // a curated subset is flagged Simple.
 public static partial class PalSettingsCatalog
 {
-    // Password fields are never editable here: AdminPassword desyncs the panel's REST auth if
-    // changed, and both are sensitive.
+    // Settings that shouldn't appear in the editor:
+    //  - AdminPassword / RESTAPIEnabled / RESTAPIPort: panel-critical — changing them breaks the
+    //    panel's own REST connection to the server.
+    //  - bIsMultiplay: a genuine no-op on a dedicated server (leftover from the co-op world
+    //    settings block), so it only confuses. (bIsPvP is a real, distinct setting — kept.)
     public static readonly HashSet<string> Hidden = new(StringComparer.OrdinalIgnoreCase)
-        { "AdminPassword" };
+        { "AdminPassword", "RESTAPIEnabled", "RESTAPIPort", "bIsMultiplay" };
 
     private static readonly Dictionary<string, string[]> Enums = new()
     {
@@ -51,8 +54,8 @@ public static partial class PalSettingsCatalog
     {
         "Difficulty", "DeathPenalty", "DayTimeSpeedRate", "NightTimeSpeedRate",
         "ExpRate", "PalCaptureRate", "PalSpawnNumRate", "CollectionDropRate", "EnemyDropItemRate",
-        "PalDamageRateAttack", "PlayerDamageRateAttack", "bEnablePlayerToPlayerDamage", "bEnableFriendlyFire",
-        "ServerPlayerMaxNum", "ServerName", "ServerDescription", "bIsPvP",
+        "PalDamageRateAttack", "PlayerDamageRateAttack", "bIsPvP", "bEnablePlayerToPlayerDamage", "bEnableFriendlyFire",
+        "ServerPlayerMaxNum", "ServerName", "ServerDescription",
     };
 
     public static List<PalSettingField> BuildFields(PalGameSettings settings)
