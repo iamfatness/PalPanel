@@ -21,7 +21,7 @@ else
         <div class="page-head">
             <div>
                 <h1>Game settings</h1>
-                <div class="sub">Edit <b>@_rt.Config.Name</b>'s world options. Palworld only reads these on startup and rewrites the file when it stops, so use <b>Save &amp; restart</b> to apply changes to a running server.</div>
+                <div class="sub">Edit <b>@_rt.Config.Name</b>'s world options. Palworld only reads these on startup, so saving a change to a running server restarts it to apply them.</div>
             </div>
             @if (_fields is not null)
             {
@@ -33,7 +33,6 @@ else
         </div>
 
         @if (_notice is not null) { <div class="notice ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_notice</div> }
-        @if (_warn is not null) { <div class="notice warn"><svg viewBox="0 0 24 24" fill="none"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 9v4m0 4h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>@_warn</div> }
         @if (_error is not null) { <div class="alert">@_error</div> }
 
         @if (_fields is null)
@@ -89,9 +88,14 @@ else
             }
 
             <div class="actions">
-                <button class="primary" disabled="@_busy" @onclick="SaveAndRestartAsync">Save &amp; restart server</button>
-                <button disabled="@_busy" @onclick="SaveAsync">Save settings only</button>
-                <span class="stat-sub">Save &amp; restart applies changes reliably (writes the file while the server is stopped). "Save settings only" is for when the server is already down.</span>
+                <button class="primary" disabled="@_busy" @onclick="SaveAsync">
+                    @(_rt.State == ServerState.Running ? "Save & restart server" : "Save settings")
+                </button>
+                <span class="stat-sub">
+                    @(_rt.State == ServerState.Running
+                        ? "The server is running, so saving restarts it to apply the changes (connected players get a 1-minute warning first)."
+                        : "The server is stopped — changes are written now and take effect the next time it starts.")
+                </span>
             </div>
         }
     </Authorized>
@@ -109,7 +113,6 @@ else
     private string _email = "";
     private bool _busy;
     private string? _notice;
-    private string? _warn;
     private string? _error;
 
     protected override async Task OnInitializedAsync()
@@ -146,45 +149,40 @@ else
         catch (Exception ex) { _error = $"Couldn't read settings: {ex.Message}"; }
     }
 
+    // One save that always does the right thing. Palworld only reads PalWorldSettings.ini on
+    // startup and rewrites it from memory on shutdown, so:
+    //  - Running server → restart, writing the ini in the restart's stop→start gap (the only window
+    //    the running server can't clobber it). Connected players get a courtesy warning; an empty
+    //    server restarts immediately (no pointless countdown during setup).
+    //  - Stopped/Held server → just write the ini and leave it as-is; it takes effect on next start.
+    // There is deliberately no "save without restarting a running server": Palworld would discard
+    // such a write on its next shutdown, so it would be a silent no-op.
     private async Task SaveAsync()
     {
-        _notice = null; _warn = null; _error = null; _busy = true;
+        _notice = null; _error = null; _busy = true;
         try
         {
             await Guard.EnsureAdminAsync(_email, "game-settings", CancellationToken.None);
-            PalSettingsCatalog.Apply(_fields!, _settings!);
-            await PalSettingsFile.SaveAsync(_rt!.Config.SaveDirectory, _settings!);
-            // Palworld rewrites PalWorldSettings.ini from memory when it stops, so a plain save
-            // against a RUNNING server is discarded on the next shutdown. Warn loudly and point at
-            // the reliable path; the write itself is harmless (and correct) when the server is down.
-            if (_rt.State == ServerState.Running)
-                _warn = "Saved to disk — but the server is running, and Palworld overwrites this file "
-                      + "when it stops, which will discard your change. Use \"Save & restart server\" "
-                      + "to apply it reliably, or stop the server first.";
+            if (_rt!.State == ServerState.Running)
+            {
+                var playersOn = _rt.Snapshot.Current.Players.Count > 0;
+                if (playersOn) { _notice = "Warning connected players and restarting to apply your changes…"; StateHasChanged(); }
+                await _rt.Orchestrator.RestartAsync(_email, playersOn ? [1] : null, CancellationToken.None,
+                    beforeStart: async _ =>
+                    {
+                        PalSettingsCatalog.Apply(_fields!, _settings!);
+                        await PalSettingsFile.SaveAsync(_rt!.Config.SaveDirectory, _settings!);
+                    });
+                _notice = "Settings applied; the server is restarting.";
+            }
             else
-                _notice = "Settings saved. Restart the server to apply them.";
-        }
-        catch (Exception ex) { _error = $"Couldn't save: {ex.Message}"; }
-        finally { _busy = false; }
-    }
-
-    private async Task SaveAndRestartAsync()
-    {
-        _notice = null; _warn = null; _error = null; _busy = true;
-        try
-        {
-            await Guard.EnsureAdminAsync(_email, "game-settings", CancellationToken.None);
-            // Write the ini BETWEEN stop and start (the orchestrator's beforeStart hook). Writing
-            // before the restart would be clobbered by the running server's shutdown; here it lands
-            // on disk with the server down and the relaunch reads the new values.
-            await _rt!.Orchestrator.RestartAsync(_email, [1], CancellationToken.None, beforeStart: async _ =>
             {
                 PalSettingsCatalog.Apply(_fields!, _settings!);
                 await PalSettingsFile.SaveAsync(_rt!.Config.SaveDirectory, _settings!);
-            });
-            _notice = "Settings applied while the server was stopped, and the server is restarting.";
+                _notice = "Settings saved. They'll take effect the next time the server starts.";
+            }
         }
-        catch (Exception ex) { _error = $"Couldn't save & restart: {ex.Message}"; }
+        catch (Exception ex) { _error = $"Couldn't save: {ex.Message}"; }
         finally { _busy = false; }
     }
 }

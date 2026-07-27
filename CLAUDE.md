@@ -55,9 +55,12 @@ exposed at `panel.iamfatness.us` via a Cloudflare Tunnel. .NET 8 Blazor Server, 
 - **Game settings** (`/s/{id}/game-settings`, `PalSettingsFile`/`PalGameSettings`): edits
   `Config/WindowsServer/PalWorldSettings.ini`. **Palworld rewrites that ini from memory when the
   server stops**, so a write done while the server is running is clobbered on the next shutdown.
-  "Save & restart" therefore writes the ini via `RestartAsync`'s **`beforeStart` hook** (runs
-  *between* stop and start, the only safe window); plain "Save settings only" warns when the server
-  is Running. Never write the ini before a restart — it will be lost. Note also that launch args
+  the page's **single state-aware save** therefore: if the server is Running it restarts, writing
+  the ini via `RestartAsync`'s **`beforeStart` hook** (runs *between* stop and start, the only safe
+  window; empty server → no warning countdown, populated → 1-min warning); if Stopped/Held it just
+  writes the ini in place. There is deliberately no "save without restarting a running server" — that
+  write would be discarded on the next shutdown. Never write the ini before a restart — it will be
+  lost. Note also that launch args
   (e.g. a `-players` override) can override ini values at runtime — `OverrideNote` surfaces the
   effective `Metrics.MaxPlayerNum` when it differs from the file.
 - **Alerts** (`/alerts`, panel-level, `AlertService`): crash/health alerting with an in-panel feed +
