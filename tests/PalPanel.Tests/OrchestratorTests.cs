@@ -227,6 +227,44 @@ public class OrchestratorTests
     }
 
     [Fact]
+    public async Task Restart_BeforeStartHook_RunsAfterStopPhaseAndBeforeStart()
+    {
+        // Config changes (e.g. game settings) must be applied while the server is DOWN — Palworld
+        // rewrites PalWorldSettings.ini from memory on shutdown, so a write done before the stop is
+        // clobbered. The hook must run after save/shutdown/backup and before the relaunch.
+        var (orch, sup, launcher, order, _, _, _) = Make();
+        await sup.StartAsync(default);
+        sup.MarkRunning();
+        launcher.OnLaunch = _ => order.Add("start");
+
+        await orch.RestartAsync("admin@x.com", null, default,
+            beforeStart: _ => { order.Add("apply"); return Task.CompletedTask; });
+
+        Assert.Equal(["save", "shutdown", "backup", "apply", "start"], order.Where(o => o is not "info").ToList());
+    }
+
+    [Fact]
+    public async Task Restart_BeforeStartHookThrows_StillRelaunches_LogsAndSurfaces()
+    {
+        // Availability first: a failing apply (e.g. ini write permission denied) must not leave the
+        // server down — it is logged loudly and the server is relaunched anyway, then the failure is
+        // surfaced to the caller (the game-settings page) so the operator knows it didn't take.
+        var (orch, sup, launcher, order, _, events, _) = Make();
+        await sup.StartAsync(default);
+        sup.MarkRunning();
+        launcher.OnLaunch = _ => order.Add("start");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            orch.RestartAsync("admin@x.com", null, default,
+                beforeStart: _ => throw new IOException("permission denied")));
+
+        Assert.Contains("start", order);                 // relaunched despite the apply failure
+        Assert.Equal(ServerState.Starting, sup.State);
+        Assert.Contains(events.Events, e => e.Type == "restart-apply-failed");
+        Assert.Contains(events.Events, e => e.Type == "restart-launched");
+    }
+
+    [Fact]
     public async Task ConcurrentOp_LogsLifecycleBusy_AndCompletesAfterRitual()
     {
         // The restart ritual can hold the lifecycle gate for 10+ minutes of warning delays;

@@ -52,6 +52,14 @@ exposed at `panel.iamfatness.us` via a Cloudflare Tunnel. .NET 8 Blazor Server, 
   and fixed disks (DriveInfo) via guarded Win32 — degrades to null/empty, never throws into the UI.
 - Schedules support `restart`, `backup`, and `announce` (message in `Schedule.Parameters`, broadcast
   via `Orchestrator.AnnounceAsync(AdminGuard.SchedulerActor, …)`).
+- **Game settings** (`/s/{id}/game-settings`, `PalSettingsFile`/`PalGameSettings`): edits
+  `Config/WindowsServer/PalWorldSettings.ini`. **Palworld rewrites that ini from memory when the
+  server stops**, so a write done while the server is running is clobbered on the next shutdown.
+  "Save & restart" therefore writes the ini via `RestartAsync`'s **`beforeStart` hook** (runs
+  *between* stop and start, the only safe window); plain "Save settings only" warns when the server
+  is Running. Never write the ini before a restart — it will be lost. Note also that launch args
+  (e.g. a `-players` override) can override ini values at runtime — `OverrideNote` surfaces the
+  effective `Metrics.MaxPlayerNum` when it differs from the file.
 - **Alerts** (`/alerts`, panel-level, `AlertService`): crash/health alerting with an in-panel feed +
   unread nav badge, plus optional email. `AlertingEventSink` decorates each server's event sink and
   maps notable events → alerts (crash/held/restart-failed → `server-down`, api-unreachable/recovered
