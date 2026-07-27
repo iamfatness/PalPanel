@@ -8,7 +8,26 @@ Scripts and steps for building and installing PalPanel on the Palworld host
 
 - `publish.ps1` -- builds a self-contained win-x64 publish output.
 - `install-service.ps1` -- installs/starts the `PalPanel` Windows service
-  (run as Administrator on the target machine).
+  (run as Administrator on the target machine). Use for a **first** install.
+- `update-service.ps1` -- **updates an already-installed** service in place:
+  stops it, snapshots `C:\PalPanel\app` to `app.bak-<timestamp>`, copies the new
+  build over it while preserving live data (`palpanel.db`, `dp-keys\`,
+  `appsettings.Local.json`), restarts, and health-checks `http://localhost:5080`.
+  Self-elevates via UAC. This is the routine "ship a new version" path.
+
+## Updating an existing install
+
+```powershell
+.\deploy\publish.ps1          # build the new version
+.\deploy\update-service.ps1   # stop -> back up -> copy -> start -> health-check (self-elevates)
+```
+
+`update-service.ps1` never touches `palpanel.db`, `dp-keys\`, or
+`appsettings.Local.json` (it excludes them from the copy and never uses
+`robocopy /MIR`), and always snapshots the old install first, so a bad deploy
+rolls back with `robocopy <app.bak-...> C:\PalPanel\app /MIR`. Restarting the
+panel service does **not** restart the Palworld game server (the panel re-adopts
+`PalServer.exe` on startup), so there is no player-facing downtime.
 
 ## Install steps
 
