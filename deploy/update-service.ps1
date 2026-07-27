@@ -32,10 +32,14 @@ $ErrorActionPreference = "Stop"
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Host "Not elevated — relaunching as Administrator (approve the UAC prompt)..." -ForegroundColor Yellow
-    $relaunch = @('-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"",
-                  '-Source',"`"$Source`"",'-AppDir',"`"$AppDir`"",
-                  '-ServiceName',$ServiceName,'-HealthPort',$HealthPort)
+    Write-Host "Not elevated - relaunching as Administrator (approve the UAC prompt)..." -ForegroundColor Yellow
+    $q = '"'
+    $relaunch = @('-NoExit','-NoProfile','-ExecutionPolicy','Bypass',
+                  '-File',    ($q + $PSCommandPath + $q),
+                  '-Source',  ($q + $Source + $q),
+                  '-AppDir',  ($q + $AppDir + $q),
+                  '-ServiceName', $ServiceName,
+                  '-HealthPort',  $HealthPort)
     Start-Process powershell -Verb RunAs -ArgumentList $relaunch
     return
 }
@@ -72,7 +76,7 @@ if ($LASTEXITCODE -ge 8) { throw "Backup robocopy failed (code $LASTEXITCODE); a
 Write-Host "Deploying new build into $AppDir (preserving DB, keyring, local settings) ..."
 robocopy $Source $AppDir /E /R:1 /W:1 /XF $excludeFiles /XD $excludeDirs /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) {
-    Write-Warning "Deploy copy failed (code $LASTEXITCODE). Roll back: robocopy `"$backup`" `"$AppDir`" /MIR"
+    Write-Warning "Deploy copy failed (code $LASTEXITCODE). Roll back: robocopy $backup $AppDir /MIR"
     throw "Deploy aborted."
 }
 
@@ -93,5 +97,5 @@ if ($up) {
 } else {
     Write-Warning "Service started but http://localhost:$HealthPort did not respond in ~40s."
     Write-Warning "Check: Get-EventLog -LogName Application -Source PalPanel -Newest 20"
-    Write-Warning "Roll back:  Stop-Service $ServiceName; robocopy `"$backup`" `"$AppDir`" /MIR; Start-Service $ServiceName"
+    Write-Warning "Roll back:  Stop-Service $ServiceName; robocopy $backup $AppDir /MIR; Start-Service $ServiceName"
 }
