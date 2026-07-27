@@ -18,7 +18,8 @@ public class SchedulerTests
         public List<(string Actor, string Message)> AnnounceArgs { get; } = [];
         public Task StartAsync(string actor, CancellationToken ct) => Task.CompletedTask;
         public Task StopAsync(string actor, CancellationToken ct) => Task.CompletedTask;
-        public Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct)
+        public Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct,
+            Func<CancellationToken, Task>? beforeStart = null)
         { RestartCalls++; RestartArgs.Add((actor, warningMinutes)); return Task.CompletedTask; }
         public Task SaveAsync(string actor, CancellationToken ct) => Task.CompletedTask;
         public Task AnnounceAsync(string actor, string message, CancellationToken ct)
@@ -32,7 +33,8 @@ public class SchedulerTests
     {
         public Task StartAsync(string actor, CancellationToken ct) => Task.CompletedTask;
         public Task StopAsync(string actor, CancellationToken ct) => Task.CompletedTask;
-        public Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct)
+        public Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct,
+            Func<CancellationToken, Task>? beforeStart = null)
             => throw new InvalidOperationException("boom");
         public Task SaveAsync(string actor, CancellationToken ct) => Task.CompletedTask;
         public Task AnnounceAsync(string actor, string message, CancellationToken ct) => Task.CompletedTask;

@@ -5,7 +5,8 @@ public interface IServerOrchestrator
 {
     Task StartAsync(string actor, CancellationToken ct);
     Task StopAsync(string actor, CancellationToken ct);
-    Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct);
+    Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct,
+        Func<CancellationToken, Task>? beforeStart = null);
     Task SaveAsync(string actor, CancellationToken ct);
     Task AnnounceAsync(string actor, string message, CancellationToken ct);
     Task KickAsync(string actor, string userId, string name, CancellationToken ct);
@@ -66,7 +67,13 @@ public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupServi
         { await events.LogAsync("backup-failed", $"Pre-stop backup failed: {ex.Message}", actor); }
     }
 
-    public async Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct)
+    // `beforeStart`, when supplied, runs AFTER the stop phase and BEFORE the relaunch — the only
+    // safe window to write PalWorldSettings.ini, since a running Palworld server rewrites that file
+    // from memory on shutdown and would clobber a write done beforehand. Used by the game-settings
+    // page to apply edits reliably. A failing hook is logged and the server is still relaunched
+    // (availability first), then the failure is surfaced to the caller.
+    public async Task RestartAsync(string actor, IReadOnlyList<int>? warningMinutes, CancellationToken ct,
+        Func<CancellationToken, Task>? beforeStart = null)
     {
         await guard.EnsureAdminAsync(actor, "Restart", ct);
         await AcquireGateAsync("Restart", actor, ct);
@@ -94,6 +101,19 @@ public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupServi
             try { await StopCoreAsync(actor, ct); }
             catch (Exception ex)
             { await events.LogAsync("restart-stop-phase-error", $"Stop phase failed during restart: {ex.Message}", actor); }
+
+            // Apply pending config now — while the server is down and can't overwrite the file.
+            Exception? applyError = null;
+            if (beforeStart is not null)
+            {
+                try { await beforeStart(ct); }
+                catch (Exception ex)
+                {
+                    applyError = ex;
+                    await events.LogAsync("restart-apply-failed", $"Applying settings during restart failed: {ex.Message}", actor);
+                }
+            }
+
             try
             {
                 await sup.StartAsync(ct);
@@ -101,6 +121,12 @@ public class ServerOrchestrator(ProcessSupervisor sup, IPalApi api, IBackupServi
             }
             catch (Exception ex)
             { await events.LogAsync("restart-start-failed", $"Relaunch failed after restart: {ex.Message}", actor); }
+
+            // Surface an apply failure only after the relaunch has been attempted, so the operator
+            // learns their change didn't take without ever trading away server availability for it.
+            if (applyError is not null)
+                throw new InvalidOperationException(
+                    $"Server was restarted, but applying settings failed: {applyError.Message}", applyError);
         }
         finally { _gate.Release(); }
     }

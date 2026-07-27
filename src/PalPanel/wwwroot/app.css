@@ -193,6 +193,8 @@ input::placeholder { color: var(--ink-3); }
 .send-box input { flex: 1; min-width: 0; }
 .notice { display: flex; align-items: center; gap: 9px; padding: 10px 13px; border-radius: var(--radius-sm); margin-bottom: 1rem; font-size: 13.5px; background: var(--ok-wash); border: 1px solid color-mix(in srgb, var(--online) 32%, transparent); color: color-mix(in srgb, var(--online) 78%, var(--ink)); }
 .notice svg { width: 15px; height: 15px; color: var(--online); flex: none; }
+.notice.warn { background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: color-mix(in srgb, var(--warn) 34%, transparent); color: color-mix(in srgb, var(--warn) 82%, var(--ink)); }
+.notice.warn svg { color: var(--warn); }
 .mono { font-family: var(--mono); font-size: .9em; color: var(--ink-2); }
 
 /* Simple/Advanced segmented toggle */
