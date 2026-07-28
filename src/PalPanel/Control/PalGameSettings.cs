@@ -32,6 +32,25 @@ public sealed class PalGameSettings
         _entries.Add(new(key, value)); // append unknown keys rather than fail
     }
 
+    // Append every key present in `other` but missing here (with other's value), so the editor can
+    // surface settings the live file omitted — e.g. keys Palworld left out that live in its
+    // DefaultPalWorldSettings.ini. Existing keys, values, and order are left untouched. `skip` lets
+    // the caller keep panel-critical keys (RESTAPI*, AdminPassword) from being injected. Returns the
+    // number of keys added.
+    public int AddMissingFrom(PalGameSettings other, Func<string, bool>? skip = null)
+    {
+        var present = new HashSet<string>(_entries.Select(e => e.Key), StringComparer.Ordinal);
+        int added = 0;
+        foreach (var e in other._entries)
+        {
+            if (present.Contains(e.Key) || skip?.Invoke(e.Key) == true) continue;
+            _entries.Add(new(e.Key, e.Value));
+            present.Add(e.Key);
+            added++;
+        }
+        return added;
+    }
+
     public static PalGameSettings Parse(string iniText)
     {
         int idx = iniText.IndexOf(Marker, StringComparison.Ordinal);

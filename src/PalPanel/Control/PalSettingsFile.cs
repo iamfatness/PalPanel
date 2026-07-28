@@ -14,6 +14,26 @@ public static class PalSettingsFile
         return PalGameSettings.Parse(await File.ReadAllTextAsync(path));
     }
 
+    // Palworld ships DefaultPalWorldSettings.ini alongside PalServer.exe with the COMPLETE set of
+    // options (and their defaults) for the installed version. The live PalWorldSettings.ini often
+    // lists only a subset, so we read the default file to backfill the rest into the editor.
+    public static string? DefaultPathFor(string exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath)) return null;
+        var dir = Path.GetDirectoryName(exePath);
+        return string.IsNullOrEmpty(dir) ? null : Path.Combine(dir, "DefaultPalWorldSettings.ini");
+    }
+
+    public static async Task<PalGameSettings?> LoadDefaultsAsync(string exePath)
+    {
+        var path = DefaultPathFor(exePath);
+        if (path is null || !File.Exists(path)) return null;
+        // A missing/malformed default file must never break the editor — just fall back to the
+        // live keys (return null → no backfill).
+        try { return PalGameSettings.Parse(await File.ReadAllTextAsync(path)); }
+        catch { return null; }
+    }
+
     public static async Task SaveAsync(string saveDirectory, PalGameSettings settings)
     {
         var path = PathFor(saveDirectory);

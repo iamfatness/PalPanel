@@ -45,6 +45,10 @@ else
         else
         {
             var shown = _advanced ? _fields : _fields.Where(f => f.Simple).ToList();
+            @if (_backfilled > 0)
+            {
+                <p class="stat-sub">Showing all @_fields.Count settings — @_backfilled were filled in from Palworld's <span class="mono">DefaultPalWorldSettings.ini</span>@(_advanced ? "." : " and appear in the Advanced view.")</p>
+            }
             @if (shown.Count == 0)
             {
                 <div class="empty-state"><p>No settings to show in the Simple view.</p></div>
@@ -112,6 +116,7 @@ else
     private bool _advanced;
     private string _email = "";
     private bool _busy;
+    private int _backfilled;
     private string? _notice;
     private string? _error;
 
@@ -144,6 +149,14 @@ else
         try
         {
             _settings = await PalSettingsFile.LoadAsync(_rt!.Config.SaveDirectory);
+            if (_settings is not null)
+            {
+                // Backfill every option the live file omitted from Palworld's own
+                // DefaultPalWorldSettings.ini, so the whole setting surface is exposed. Panel-
+                // critical keys stay hidden (never inject RESTAPI*/AdminPassword from defaults).
+                var defaults = await PalSettingsFile.LoadDefaultsAsync(_rt.Config.ExePath);
+                _backfilled = defaults is null ? 0 : _settings.AddMissingFrom(defaults, PalSettingsCatalog.Hidden.Contains);
+            }
             _fields = _settings is null ? null : PalSettingsCatalog.BuildFields(_settings);
         }
         catch (Exception ex) { _error = $"Couldn't read settings: {ex.Message}"; }

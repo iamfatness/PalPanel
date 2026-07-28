@@ -53,7 +53,12 @@ exposed at `panel.iamfatness.us` via a Cloudflare Tunnel. .NET 8 Blazor Server, 
 - Schedules support `restart`, `backup`, and `announce` (message in `Schedule.Parameters`, broadcast
   via `Orchestrator.AnnounceAsync(AdminGuard.SchedulerActor, …)`).
 - **Game settings** (`/s/{id}/game-settings`, `PalSettingsFile`/`PalGameSettings`): edits
-  `Config/WindowsServer/PalWorldSettings.ini`. **Palworld rewrites that ini from memory when the
+  `Config/WindowsServer/PalWorldSettings.ini`. The editor only renders keys present in that file,
+  so on load it **backfills every option the live file omits from Palworld's own
+  `DefaultPalWorldSettings.ini`** (found next to `ExePath`; `PalGameSettings.AddMissingFrom`) to
+  expose the full setting surface, tracking the installed version. Panel-critical keys
+  (`Hidden`: RESTAPI*/AdminPassword) are never injected from defaults. **Palworld rewrites that ini
+  from memory when the
   server stops**, so a write done while the server is running is clobbered on the next shutdown.
   the page's **single state-aware save** therefore: if the server is Running it restarts, writing
   the ini via `RestartAsync`'s **`beforeStart` hook** (runs *between* stop and start, the only safe
