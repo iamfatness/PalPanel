@@ -65,4 +65,41 @@ public class PalGameSettingsTests
     {
         Assert.Throws<FormatException>(() => PalGameSettings.Parse("[/Script/Pal.PalGameWorldSettings]\r\n"));
     }
+
+    [Fact]
+    public void AddMissingFrom_BackfillsAbsentKeys_KeepsExistingValues_AndCountsAdds()
+    {
+        // Live file lists only a subset; the default file (Palworld's DefaultPalWorldSettings.ini)
+        // carries the full set. Missing keys are backfilled with the default's value; keys already
+        // present keep the LIVE value (defaults never override).
+        var live = PalGameSettings.Parse(
+            "[/Script/Pal.PalGameWorldSettings]\r\nOptionSettings=(ExpRate=2.000000,Difficulty=Hard)\r\n");
+        var defaults = PalGameSettings.Parse(
+            "[/Script/Pal.PalGameWorldSettings]\r\nOptionSettings=(ExpRate=1.000000,Difficulty=None,BaseCampMaxNumInGuild=4)\r\n");
+
+        var added = live.AddMissingFrom(defaults);
+
+        Assert.Equal(1, added);
+        Assert.Equal("2.000000", live.Get("ExpRate"));          // live value kept, not the default 1.0
+        Assert.Equal("Hard", live.Get("Difficulty"));            // live value kept
+        Assert.Equal("4", live.Get("BaseCampMaxNumInGuild"));    // backfilled from defaults
+        Assert.Contains("BaseCampMaxNumInGuild=4", live.ToIniText());
+    }
+
+    [Fact]
+    public void AddMissingFrom_HonorsSkip_ForPanelCriticalKeys()
+    {
+        // Panel-critical keys (RESTAPI*, AdminPassword) must never be injected from defaults, or a
+        // default RESTAPIPort/Enabled could break the panel's own REST connection to the server.
+        var live = PalGameSettings.Parse(
+            "[/Script/Pal.PalGameWorldSettings]\r\nOptionSettings=(ExpRate=1.000000)\r\n");
+        var defaults = PalGameSettings.Parse(
+            "[/Script/Pal.PalGameWorldSettings]\r\nOptionSettings=(RESTAPIPort=8212,BaseCampMaxNumInGuild=4)\r\n");
+
+        var added = live.AddMissingFrom(defaults, PalSettingsCatalog.Hidden.Contains);
+
+        Assert.Equal(1, added);
+        Assert.Null(live.Get("RESTAPIPort"));                    // skipped
+        Assert.Equal("4", live.Get("BaseCampMaxNumInGuild"));    // backfilled
+    }
 }
